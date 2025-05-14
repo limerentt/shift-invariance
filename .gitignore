@@ -31,4 +31,29 @@ temp/
 
 # Специфичные для проекта
 figures/tmp_frames/
-*.bak 
+*.bak
+
+# Данные и результаты (большие файлы)
+data/backgrounds/*
+data/objects/*
+data/sequences/*
+data/sequences_smooth/*
+sequences/**/*.png
+sequences/**/*.jpg
+sequences/**/*.jsonl
+figures/boxplot_gifs/*
+figures/yolo_gifs/*
+figures/yolo_real_gifs/*
+results/classifiers/*
+results/yolo/*
+results/yolo_tips/*
+
+# Чекпоинты и модели
+checkpoints/*.pt
+checkpoints/*.pth
+checkpoints/*.h5
+*.onnx
+*.weights
+
+# Сохранять .gitkeep файлы
+!**/.gitkeep 
