@@ -17,6 +17,7 @@ import imageio.v2 as imageio
 from pathlib import Path
 import cv2
 from PIL import Image
+from collections import Counter
 
 
 # =====================================================================
@@ -98,35 +99,46 @@ def get_boxplot_data(confidence, min_value=75, max_value=100, window=10):
     return [max(min_value, min(max_value, base + random.uniform(-spread, spread))) for _ in range(window)]
 
 
-def get_color_by_value(value, min_value, max_value):
+def get_color_by_value(value, min_value, max_value, metric="cos_sim"):
     """
-    Возвращает цвет от красного к зеленому в зависимости от значения
+    Возвращает цвет от красного к зеленому в зависимости от значения метрики.
     
     Args:
         value: значение метрики
         min_value: минимальное значение диапазона
         max_value: максимальное значение диапазона
+        metric: тип метрики ("cos_sim", "conf_drift", "confidence" или "iou_drift")
         
     Returns:
-        str: цвет в формате hex (#RRGGBB)
+        tuple: цвет в формате RGB (r, g, b) с значениями от 0 до 1
     """
-    # Нормализуем значение в диапазон [0, 1]
-    norm_value = max(0, min(1, (value - min_value) / (max_value - min_value)))
+    # Для некоторых метрик инвертируем (меньше = лучше)
+    if metric in ["conf_drift", "iou_drift"]:
+        normalized_value = 1.0 - ((value - min_value) / (max_value - min_value))
+    else:
+        normalized_value = (value - min_value) / (max_value - min_value)
+    
+    # Ограничиваем значение между 0 и 1
+    normalized_value = max(0, min(1, normalized_value))
     
     # Используем градиент (красный -> желтый -> зеленый)
-    if norm_value < 0.5:
-        # Красный -> Желтый
+    if normalized_value < 0.5:
+        # От красного к желтому
         r = 1.0
-        g = norm_value * 2
+        g = normalized_value * 2
         b = 0.0
     else:
-        # Желтый -> Зеленый
-        r = 1.0 - 2 * (norm_value - 0.5)
+        # От желтого к зеленому
+        r = 1.0 - 2 * (normalized_value - 0.5)
         g = 1.0
         b = 0.0
     
-    # Преобразуем в HEX строку
-    return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
+    # Убедимся, что значения в диапазоне [0, 1]
+    r = max(0, min(1, r))
+    g = max(0, min(1, g))
+    b = max(0, min(1, b))
+    
+    return (r, g, b)
 
 
 # =====================================================================
@@ -280,7 +292,7 @@ def save_gif_animation(frames_paths, output_path, fps=5, loop=0):
         
         print(f"Создание GIF из {len(frames_paths)} кадров...")
         
-        # Читаем все кадры как PIL Images для последующей обработки
+        # Читаем все кадры и определяем их размеры
         pil_frames = []
         frame_sizes = []
         
@@ -301,26 +313,6 @@ def save_gif_animation(frames_paths, output_path, fps=5, loop=0):
                 elif pil_img.mode != 'RGB':
                     pil_img = pil_img.convert('RGB')
                 
-                # Всегда улучшаем яркость изображения для гарантии видимости
-                img_array = np.array(pil_img)
-                avg_brightness = np.mean(img_array)
-                
-                # Всегда увеличиваем яркость, чтобы убедиться, что воробей виден
-                enhanced_array = cv2.convertScaleAbs(img_array, alpha=1.5, beta=50)
-                
-                # Дополнительно используем CLAHE для улучшения локального контраста
-                try:
-                    lab = cv2.cvtColor(enhanced_array, cv2.COLOR_RGB2LAB)
-                    l, a, b = cv2.split(lab)
-                    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-                    cl = clahe.apply(l)
-                    limg = cv2.merge((cl, a, b))
-                    enhanced_array = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
-                except Exception as e:
-                    print(f"Предупреждение: Не удалось применить CLAHE для кадра {i}: {e}")
-                
-                pil_img = Image.fromarray(enhanced_array)
-                
                 pil_frames.append(pil_img)
                 
                 # Для индикации прогресса
@@ -336,73 +328,39 @@ def save_gif_animation(frames_paths, output_path, fps=5, loop=0):
             print("Ошибка: Не удалось загрузить ни одного кадра")
             return False
             
-        # Анализируем размеры кадров для определения оптимального
+        # Определение согласованного размера для всех кадров
         print("Анализ размеров кадров...")
-        width_stats = [size[0] for size in frame_sizes]
-        height_stats = [size[1] for size in frame_sizes]
         
-        # Определяем медианный размер кадра как стандартный
-        # (медиана более устойчива к выбросам, чем среднее)
-        median_width = sorted(width_stats)[len(width_stats) // 2]
-        median_height = sorted(height_stats)[len(height_stats) // 2]
+        # Используем первый кадр как эталон размера, чтобы избежать колебаний размеров
+        # Это самый надежный способ обеспечить стабильность размеров между кадрами
+        standard_width, standard_height = frame_sizes[0]
         
-        # Проверяем соотношение сторон на корректность
-        # Обычно ширина больше высоты - если наоборот, возможно данные перепутаны
-        if median_height > median_width * 1.5:  # Если кадр слишком "высокий"
-            print(f"Внимание: Подозрительное соотношение сторон {median_width}x{median_height}")
-            print("Попытка корректировки...")
-            # Меняем местами ширину и высоту
-            temp = median_width
-            median_width = median_height
-            median_height = temp
-        
-        # Ограничиваем максимальный размер для GIF (например, не более 1200 пикселей по ширине)
-        max_width = 1200
-        if median_width > max_width:
-            scale_factor = max_width / median_width
-            median_width = max_width
-            median_height = int(median_height * scale_factor)
+        print(f"Выбран стандартный размер кадра: {standard_width}x{standard_height}")
         
         # Убеждаемся, что размеры четные для лучшей совместимости
-        median_width = median_width - (median_width % 2)
-        median_height = median_height - (median_height % 2)
+        standard_width = standard_width - (standard_width % 2)
+        standard_height = standard_height - (standard_height % 2)
         
-        reference_size = (median_width, median_height)
-        print(f"Выбран стандартный размер кадра: {reference_size[0]}x{reference_size[1]}")
+        standard_size = (standard_width, standard_height)
         
-        # Приводим все кадры к одному размеру, сохраняя соотношение сторон
+        # Приводим все кадры к одному размеру
         uniform_frames = []
         for i, pil_img in enumerate(pil_frames):
-            if pil_img.size != reference_size:
-                # Всегда используем белый фон
-                new_img = Image.new('RGB', reference_size, (255, 255, 255))
-                
-                # Изменяем размер с сохранением пропорций
-                aspect_ratio = pil_img.width / pil_img.height
-                if aspect_ratio > reference_size[0] / reference_size[1]:
-                    # Ограничены по ширине
-                    new_width = reference_size[0]
-                    new_height = int(new_width / aspect_ratio)
-                else:
-                    # Ограничены по высоте
-                    new_height = reference_size[1]
-                    new_width = int(new_height * aspect_ratio)
-                
-                # Изменяем размер изображения
-                resized_img = pil_img.resize((new_width, new_height), Image.LANCZOS)
-                
-                # Вставляем изображение в центр холста
-                paste_x = (reference_size[0] - new_width) // 2
-                paste_y = (reference_size[1] - new_height) // 2
-                new_img.paste(resized_img, (paste_x, paste_y))
-                
-                print(f"Изменен размер кадра {i} с {pil_img.size} до {reference_size} (центрирован)")
-                pil_img = new_img
-                
-            uniform_frames.append(pil_img)
+            # Всегда приводим к стандартному размеру, даже если размеры совпадают
+            # Это гарантирует единообразие всех кадров
+            if pil_img.size != standard_size:
+                resized_img = pil_img.resize(standard_size, Image.LANCZOS)
+                uniform_frames.append(resized_img)
+                print(f"Изменен размер кадра {i} с {pil_img.size} до {standard_size}")
+            else:
+                uniform_frames.append(pil_img)
         
-        # Сохраняем GIF
+        # Сохраняем GIF с фиксированными настройками
         print(f"Сохраняем GIF с {len(uniform_frames)} кадрами (FPS={fps})")
+        
+        # Важные настройки, которые делают GIF стабильным:
+        # - optimize=False предотвращает автоматическую оптимизацию, которая может изменить размеры
+        # - disposal=2 указывает, что каждый кадр должен полностью заменять предыдущий
         uniform_frames[0].save(
             output_path,
             format='GIF',
@@ -410,8 +368,10 @@ def save_gif_animation(frames_paths, output_path, fps=5, loop=0):
             save_all=True,
             duration=int(1000/fps),  # продолжительность в мс
             loop=loop,
-            optimize=False
+            optimize=False,
+            disposal=2  # Каждый кадр полностью заменяет предыдущий
         )
+        
         print(f"Анимация сохранена в {output_path}")
         return True
     except Exception as e:
@@ -513,14 +473,41 @@ def parse_bbox_string(bbox_str):
     Преобразует строковое представление bbox в список
     
     Args:
-        bbox_str: строка с bbox в формате '[x, y, w, h]' или уже список
+        bbox_str: строка с bbox в формате '[x, y, w, h]' или 'x,y,w,h' или 
+                 "\"x,y,w,h\"" (из CSV) или уже список/кортеж
         
     Returns:
         list: [x, y, w, h]
     """
+    if isinstance(bbox_str, (list, tuple, np.ndarray)):
+        return list(bbox_str)
+    
     if isinstance(bbox_str, str):
-        return eval(bbox_str)
-    return bbox_str
+        try:
+            # Удаляем лишние кавычки, если они есть
+            clean_str = bbox_str.strip('"\'')
+            
+            # Проверяем, содержит ли строка запятые без скобок (формат "x,y,w,h")
+            if ',' in clean_str and not ('[' in clean_str or '(' in clean_str):
+                return [float(x.strip()) for x in clean_str.split(',')]
+            # Проверяем, может ли это быть список в строковом представлении (формат "[x, y, w, h]")
+            elif '[' in clean_str or '(' in clean_str:
+                return eval(clean_str)
+            else:
+                print(f"Предупреждение: Необычный формат bbox: {bbox_str}, возвращаем пустой bbox")
+                return [0, 0, 0, 0]
+        except Exception as e:
+            print(f"Ошибка при разборе bbox {bbox_str}: {e}")
+            return [0, 0, 0, 0]
+    
+    # Для случая, если передано число (некорректный формат)
+    if isinstance(bbox_str, (int, float)):
+        print(f"Предупреждение: Получено числовое значение вместо bbox: {bbox_str}")
+        return [0, 0, 0, 0]
+    
+    # Для других типов данных
+    print(f"Предупреждение: Неизвестный формат bbox: {bbox_str}, тип: {type(bbox_str)}")
+    return [0, 0, 0, 0]
 
 
 def find_sequence_ids(seq_dir):
