@@ -203,7 +203,8 @@ def create_yolo_frame(
     tips_bbox=None, tips_conf=None, 
     min_conf=75, max_conf=85, frame_idx=0, total_frames=100,
     all_frames=None, fixed_size=(16, 8), object_class="object",
-    img_filename=""
+    img_filename="",
+    all_baseline_conf=None, all_tips_conf=None
 ):
     """
     Создает полный кадр сравнения YOLO моделей с изображением и боксплотом в стиле legacy
@@ -223,6 +224,8 @@ def create_yolo_frame(
         fixed_size: фиксированный размер фигуры (ширина, высота) в дюймах
         object_class: класс объекта
         img_filename: имя файла изображения для отображения в заголовке
+        all_baseline_conf: список всех значений confidence для baseline модели на всей последовательности
+        all_tips_conf: список всех значений confidence для TIPS модели на всей последовательности
         
     Returns:
         fig: созданный кадр (фигура matplotlib)
@@ -258,6 +261,18 @@ def create_yolo_frame(
             'Baseline': baseline_conf,
             'TIPS': tips_conf
         }
+        
+        # Добавляем all_values для boxplot на заднем фоне, если они доступны
+        boxplot_all_values = []
+        if all_baseline_conf is not None:
+            boxplot_all_values.append([conf * 100 for conf in all_baseline_conf])
+        else:
+            boxplot_all_values.append(None)
+            
+        if all_tips_conf is not None:
+            boxplot_all_values.append([conf * 100 for conf in all_tips_conf])
+        else:
+            boxplot_all_values.append(None)
     else:
         model_names = ['Baseline']
         models_data = {
@@ -266,6 +281,13 @@ def create_yolo_frame(
         models_current = {
             'Baseline': baseline_conf
         }
+        
+        # Добавляем all_values для boxplot на заднем фоне, если они доступны
+        boxplot_all_values = []
+        if all_baseline_conf is not None:
+            boxplot_all_values.append([conf * 100 for conf in all_baseline_conf])
+        else:
+            boxplot_all_values.append(None)
     
     # Настраиваем график боксплотов
     ax_box.set_ylim(min_conf, max_conf)
@@ -273,6 +295,26 @@ def create_yolo_frame(
     
     # Позиции боксплотов
     positions = list(range(1, len(model_names) + 1))
+    
+    # Сначала рисуем boxplot для всех значений на заднем фоне
+    # Для каждой модели проверяем, есть ли данные для всех значений
+    for i, (pos, all_values) in enumerate(zip(positions, boxplot_all_values)):
+        if all_values is not None:
+            # Создаем boxplot на фоне с более нейтральными цветами
+            bp = ax_box.boxplot(
+                [all_values], positions=[pos], notch=False, patch_artist=True, 
+                vert=True, widths=0.6, showfliers=False, 
+                medianprops={'color': 'black', 'linewidth': 1.5, 'alpha': 0.7},
+                boxprops={'linewidth': 1, 'alpha': 0.3},
+                whiskerprops={'linewidth': 1, 'color': 'gray', 'alpha': 0.4},
+                capprops={'linewidth': 1, 'color': 'gray', 'alpha': 0.4},
+                zorder=1  # Размещаем boxplot на заднем плане
+            )
+            
+            # Раскрашиваем боксы в светло-серый
+            for patch in bp['boxes']:
+                patch.set_facecolor('lightgray')
+                patch.set_alpha(0.3)
     
     # Получаем статистики для боксплотов
     model_stats = {}
@@ -327,7 +369,8 @@ def create_yolo_frame(
                 bin_height,
                 facecolor=color, 
                 edgecolor=None,
-                alpha=0.8  # Непрозрачность как в legacy коде
+                alpha=0.8,  # Непрозрачность как в legacy коде
+                zorder=2     # Поверх boxplot на заднем фоне
             )
             ax_box.add_patch(bin_rect)
             
@@ -347,18 +390,19 @@ def create_yolo_frame(
             facecolor='white', 
             edgecolor='black', 
             linewidth=1.5, 
-            alpha=0.3  # Прозрачность как в legacy коде
+            alpha=0.3,  # Прозрачность как в legacy коде
+            zorder=3     # Поверх цветного бина
         )
         ax_box.add_patch(box)
         
         # Медиана
-        ax_box.hlines(stats['median'], pos - 0.4, pos + 0.4, colors='black', linewidth=2.0, alpha=0.5)
+        ax_box.hlines(stats['median'], pos - 0.4, pos + 0.4, colors='black', linewidth=2.0, alpha=0.5, zorder=4)
         
         # Усы
-        ax_box.vlines(pos, stats['q1'], stats['whislo'], colors='black', linewidth=1.5, alpha=0.4)
-        ax_box.vlines(pos, stats['q3'], stats['whishi'], colors='black', linewidth=1.5, alpha=0.4)
-        ax_box.hlines(stats['whislo'], pos - 0.2, pos + 0.2, colors='black', linewidth=1.5, alpha=0.4)
-        ax_box.hlines(stats['whishi'], pos - 0.2, pos + 0.2, colors='black', linewidth=1.5, alpha=0.4)
+        ax_box.vlines(pos, stats['q1'], stats['whislo'], colors='black', linewidth=1.5, alpha=0.4, zorder=4)
+        ax_box.vlines(pos, stats['q3'], stats['whishi'], colors='black', linewidth=1.5, alpha=0.4, zorder=4)
+        ax_box.hlines(stats['whislo'], pos - 0.2, pos + 0.2, colors='black', linewidth=1.5, alpha=0.4, zorder=4)
+        ax_box.hlines(stats['whishi'], pos - 0.2, pos + 0.2, colors='black', linewidth=1.5, alpha=0.4, zorder=4)
     
     # Настройка осей и подписей
     ax_box.set_xticks(positions)
@@ -435,10 +479,20 @@ def create_yolo_comparison_gif(
     print(f"Загрузка результатов модели baseline из {baseline_results}")
     baseline_data = load_csv_results(baseline_results)
     
+    # Собираем все значения confidence для boxplot на фоне
+    all_baseline_conf = []
+    if 'confidence' in baseline_data.columns:
+        all_baseline_conf = baseline_data['confidence'].values.tolist()
+    
     # Проверяем наличие TIPS результатов
+    all_tips_conf = None
     if tips_results:
         print(f"Загрузка результатов модели TIPS из {tips_results}")
         tips_data = load_csv_results(tips_results)
+        
+        # Собираем все значения confidence для TIPS
+        if 'confidence' in tips_data.columns:
+            all_tips_conf = tips_data['confidence'].values.tolist()
     else:
         tips_data = None
     
@@ -503,13 +557,14 @@ def create_yolo_comparison_gif(
             tips_bbox = None
             tips_conf = None
         
-        # Создаем кадр
+        # Создаем кадр, передавая все значения confidence для boxplot на фоне
         fig = create_yolo_frame(
             img, gt_bbox, baseline_bbox, baseline_conf,
             tips_bbox, tips_conf,
             min_conf, max_conf, frame_idx, len(selected_frames),
             all_frames=selected_frames, fixed_size=fixed_size,
-            object_class=object_class, img_filename=img_filename
+            object_class=object_class, img_filename=img_filename,
+            all_baseline_conf=all_baseline_conf, all_tips_conf=all_tips_conf
         )
         
         # Сохраняем кадр
