@@ -46,8 +46,9 @@ def create_yolo_confidence_boxplot(
     Returns:
         bp: боксплот (для дальнейшей настройки)
     """
-    # Устанавливаем заголовок
-    ax.set_title(title, fontsize=14, color="black")
+    # Устанавливаем заголовок только если он не пустой
+    if title:
+        ax.set_title(title, fontsize=14, color="black")
     
     # Устанавливаем границы для оси Y
     ax.set_ylim(min_conf, max_conf)
@@ -129,18 +130,25 @@ def draw_yolo_bboxes(
     # Ground truth bbox - зеленый
     x, y, w, h = gt_bbox
     rect_gt = patches.Rectangle(
-        (x, y), w, h, linewidth=2, edgecolor='darkgreen', 
-        facecolor='darkgreen', alpha=0.1
+        (x, y), w, h, linewidth=3, edgecolor='darkgreen', 
+        facecolor='none', alpha=0.8
     )
     ax.add_patch(rect_gt)
+    
+    # Добавляем дополнительную полупрозрачную заливку для выделения области объекта
+    rect_gt_fill = patches.Rectangle(
+        (x, y), w, h, linewidth=0, edgecolor='none', 
+        facecolor='lightgreen', alpha=0.2
+    )
+    ax.add_patch(rect_gt_fill)
     
     # Baseline YOLO bbox - красный
     if baseline_bbox is not None:
         baseline_bbox = parse_bbox_string(baseline_bbox)
         x, y, w, h = baseline_bbox
         rect_baseline = patches.Rectangle(
-            (x, y), w, h, linewidth=2, edgecolor='#FF0000', 
-            facecolor='#FF0000', alpha=0.1
+            (x, y), w, h, linewidth=3, edgecolor='red', 
+            facecolor='none', alpha=0.8
         )
         ax.add_patch(rect_baseline)
     
@@ -149,8 +157,8 @@ def draw_yolo_bboxes(
         tips_bbox = parse_bbox_string(tips_bbox)
         x, y, w, h = tips_bbox
         rect_tips = patches.Rectangle(
-            (x, y), w, h, linewidth=2, edgecolor='#0000FF', 
-            facecolor='#0000FF', alpha=0.1
+            (x, y), w, h, linewidth=3, edgecolor='blue', 
+            facecolor='none', alpha=0.8
         )
         ax.add_patch(rect_tips)
 
@@ -174,12 +182,12 @@ def add_yolo_bbox_legend(
         
     # Базовая YOLO модель
     if has_baseline:
-        baseline_patch = patches.Patch(color='#FF0000', label='Baseline YOLO', alpha=0.3)
+        baseline_patch = patches.Patch(color='red', label='Baseline YOLO', alpha=0.3)
         handles.append(baseline_patch)
         
     # TIPS-YOLO модель
     if has_tips:
-        tips_patch = patches.Patch(color='#0000FF', label='TIPS-YOLO', alpha=0.3)
+        tips_patch = patches.Patch(color='blue', label='TIPS-YOLO', alpha=0.3)
         handles.append(tips_patch)
     
     if handles:
@@ -194,189 +202,188 @@ def create_yolo_frame(
     img, gt_bbox, baseline_bbox, baseline_conf, 
     tips_bbox=None, tips_conf=None, 
     min_conf=75, max_conf=85, frame_idx=0, total_frames=100,
-    fixed_size=(1200, 800)
+    all_frames=None, fixed_size=(16, 8), object_class="object",
+    img_filename=""
 ):
     """
-    Создает полный кадр сравнения YOLO моделей с изображением и боксплотом
+    Создает полный кадр сравнения YOLO моделей с изображением и боксплотом в стиле legacy
     
     Args:
         img: изображение для отображения
         gt_bbox: ground truth bbox [x, y, w, h]
         baseline_bbox: предсказанный bbox базовой YOLO модели [x, y, w, h]
-        baseline_conf: уверенность baseline модели [0-1]
+        baseline_conf: уверенность baseline модели [0-100]
         tips_bbox: предсказанный bbox TIPS-YOLO модели [x, y, w, h]
-        tips_conf: уверенность TIPS-YOLO модели [0-1]
+        tips_conf: уверенность TIPS-YOLO модели [0-100]
         min_conf: минимальное значение для оси Y боксплота
         max_conf: максимальное значение для оси Y боксплота
         frame_idx: номер текущего кадра
         total_frames: общее количество кадров
-        fixed_size: фиксированный размер кадра (ширина, высота)
+        all_frames: список всех номеров кадров
+        fixed_size: фиксированный размер фигуры (ширина, высота) в дюймах
+        object_class: класс объекта
+        img_filename: имя файла изображения для отображения в заголовке
         
     Returns:
         fig: созданный кадр (фигура matplotlib)
-    """   
+    """
+    if all_frames is None:
+        all_frames = list(range(total_frames))
+    
     # Проверяем наличие TIPS данных
     has_tips = tips_bbox is not None and tips_conf is not None
     
-    # Создаем синтетические данные для бокс-плотов
-    baseline_data = get_boxplot_data(baseline_conf, min_conf, max_conf)
+    # Создаем фигуру с двумя подграфиками (изображение и боксплот)
+    fig, (ax_img, ax_box) = plt.subplots(1, 2, figsize=fixed_size, 
+                                      gridspec_kw={'width_ratios': [1, 1]})
     
-    if has_tips:
-        tips_data = get_boxplot_data(tips_conf, min_conf, max_conf)
-        # Создаем имитацию данных для Anti-aliased модели (среднее между baseline и TIPS)
-        antialias_conf = np.mean([baseline_conf, tips_conf])
-        antialias_data = get_boxplot_data(antialias_conf, min_conf, max_conf)
-        
-        data_to_plot = [baseline_data, antialias_data, tips_data]
-        box_labels = ['Baseline', 'Anti-aliased', 'TIPS']
-        box_colors = ['#F8B195', '#F67280', '#C06C84']
-    else:
-        data_to_plot = [baseline_data]
-        box_labels = ['Baseline']
-        box_colors = ['#F8B195']
-    
-    # Улучшаем контрастность изображения для лучшей видимости
-    avg_brightness = np.mean(img)
-    
-    # Всегда применяем улучшение контрастности для гарантии видимости воробья
-    # Применяем более агрессивное улучшение для очень темных изображений
-    if avg_brightness < 50:
-        img = cv2.convertScaleAbs(img, alpha=2.5, beta=75)
-    else:
-        img = cv2.convertScaleAbs(img, alpha=1.8, beta=50)
-    
-    # Дополнительно используем CLAHE для улучшения локального контраста
-    try:
-        lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
-        cl = clahe.apply(l)
-        limg = cv2.merge((cl, a, b))
-        img = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
-    except Exception:
-        # Если что-то пошло не так, просто используем исходное изображение с улучшенной яркостью
-        pass
-    
-    # Задаем стиль визуализации - всегда светлая тема
-    plt.style.use('default')
-    plt.rcParams.update({
-        'font.size': 12,
-        'figure.facecolor': 'white',
-        'axes.facecolor': 'white',
-        'savefig.facecolor': 'white',
-        'text.color': 'black',
-        'axes.labelcolor': 'black',
-        'xtick.color': 'black',
-        'ytick.color': 'black'
-    })
-    
-    # Преобразуем пиксели в дюймы (dpi=100)
-    fig_width, fig_height = fixed_size[0]/100, fixed_size[1]/100
-    
-    # Создаем фигуру с фиксированным размером
-    fig = plt.figure(figsize=(fig_width, fig_height), dpi=100)
-    fig.patch.set_facecolor('white')
-    
-    # Устанавливаем структуру c фиксированными соотношениями
-    grid_h = 8  # Высота сетки
-    grid_w = 12  # Ширина сетки (соответствует соотношению сторон 3:2)
-    
-    # Заголовок (1 строка вверху)
-    ax_title = plt.subplot2grid((grid_h, grid_w), (0, 0), colspan=grid_w, rowspan=1)
-    ax_title.set_facecolor('white')
-    ax_title.axis('off')
-    
-    # Рассчитываем прогресс
-    progress = frame_idx / max(1, total_frames) * 100
-    ax_title.text(0.5, 0.5, f"Frame: {frame_idx} (Progress: {progress:.1f}%)", 
-                 fontsize=16, fontweight='bold', ha='center', va='center', color='black')
-    
-    # Изображение (занимает большую часть пространства слева)
-    ax_img = plt.subplot2grid((grid_h, grid_w), (1, 0), colspan=8, rowspan=grid_h-1)
-    ax_img.set_facecolor('white')
-    
-    # Выделяем область с воробьем для лучшей видимости
-    # Для этого создаем копию изображения с затемненным фоном
-    enhanced_img = img.copy()
-    
-    # Получаем размеры изображения
-    img_height, img_width = img.shape[:2]
-    
-    # Если у нас есть ground truth bbox, усиливаем эту область
-    if gt_bbox is not None:
-        # Получаем координаты gt_bbox
-        x, y, w, h = gt_bbox
-        
-        # Расширяем область интереса (ROI) на 10% во всех направлениях
-        roi_x = max(0, int(x - w * 0.1))
-        roi_y = max(0, int(y - h * 0.1))
-        roi_w = min(img_width - roi_x, int(w * 1.2))
-        roi_h = min(img_height - roi_y, int(h * 1.2))
-        
-        # Создаем маску для выделения области интереса
-        mask = np.zeros((img_height, img_width), dtype=np.uint8)
-        mask[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w] = 255
-        
-        # Размываем края маски для плавного перехода
-        mask = cv2.GaussianBlur(mask, (21, 21), 0)
-        
-        # Нормализуем маску от 0 до 1
-        mask = mask.astype(float) / 255.0
-        
-        # Конвертируем маску в 3-канальную для применения к RGB изображению
-        mask_3ch = np.dstack([mask, mask, mask])
-        
-        # Создаем затемненную версию изображения (70% яркости)
-        darkened = (img * 0.7).astype(np.uint8)
-        
-        # Комбинируем оригинальное изображение и затемненную версию с использованием маски
-        enhanced_img = img * mask_3ch + darkened * (1 - mask_3ch)
-        enhanced_img = enhanced_img.astype(np.uint8)
-    
-    # Устанавливаем отступы для изображения
-    ax_img.margins(0.05)
-    
-    # Отображаем изображение с выделенной областью интереса
-    ax_img.imshow(enhanced_img, aspect='auto')
-    
-    # Отрисовка bbox
-    draw_yolo_bboxes(
-        ax_img, gt_bbox, baseline_bbox, 
-        tips_bbox if has_tips else None
-    )
-    
-    # Добавление легенды
-    add_yolo_bbox_legend(
-        ax_img, has_baseline=True, 
-        has_tips=has_tips
-    )
-    
-    # Отключаем оси
+    # Отображаем изображение
+    ax_img.imshow(img)
     ax_img.axis('off')
     
-    # Боксплот confidence (справа)
-    ax_conf = plt.subplot2grid((grid_h, grid_w), (1, 8), colspan=4, rowspan=grid_h-1)
-    ax_conf.set_facecolor('white')
+    # Отрисовываем bounding box на изображении
+    draw_yolo_bboxes(ax_img, gt_bbox, baseline_bbox, tips_bbox if has_tips else None)
+    add_yolo_bbox_legend(ax_img, True, has_tips)
     
-    # Создаем боксплот
-    bp = create_yolo_confidence_boxplot(
-        ax_conf, data_to_plot, box_labels, box_colors,
-        min_conf=min_conf, max_conf=max_conf
-    )
-    
-    # Значения confidence для отображения
-    confidence_values = []
-    confidence_values.append((1, baseline_conf * 100))
-    
+    # Подготовка данных для боксплотов
+    # Определяем модели и данные
     if has_tips:
-        confidence_values.append((2, antialias_conf * 100))
-        confidence_values.append((3, tips_conf * 100))
+        model_names = ['Baseline', 'TIPS']
+        models_data = {
+            'Baseline': get_boxplot_data(baseline_conf, min_conf, max_conf),
+            'TIPS': get_boxplot_data(tips_conf, min_conf, max_conf)
+        }
+        
+        models_current = {
+            'Baseline': baseline_conf,
+            'TIPS': tips_conf
+        }
+    else:
+        model_names = ['Baseline']
+        models_data = {
+            'Baseline': get_boxplot_data(baseline_conf, min_conf, max_conf)
+        }
+        models_current = {
+            'Baseline': baseline_conf
+        }
     
-    # Добавляем метки с процентами
-    add_yolo_confidence_labels(ax_conf, confidence_values, min_conf, max_conf)
+    # Настраиваем график боксплотов
+    ax_box.set_ylim(min_conf, max_conf)
+    ax_box.set_xlim(0.5, len(model_names) + 0.5)
     
-    # Используем плотную компоновку
-    fig.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.95, wspace=0.2, hspace=0.2)
+    # Позиции боксплотов
+    positions = list(range(1, len(model_names) + 1))
+    
+    # Получаем статистики для боксплотов
+    model_stats = {}
+    for model in model_names:
+        values = models_data[model]
+        model_stats[model] = {
+            'median': np.median(values),
+            'q1': np.percentile(values, 25),
+            'q3': np.percentile(values, 75),
+            'whislo': np.min(values),
+            'whishi': np.max(values)
+        }
+    
+    # Добавляем цветные бины и боксплоты
+    for i, (model, pos) in enumerate(zip(model_names, positions)):
+        stats = model_stats[model]
+        value = models_current[model]
+        
+        # Обрабатываем случай, когда значение ниже минимального порога на графике
+        if value < min_conf:
+            # Отображаем специальный красный бин фиксированной высоты
+            error_bin_height = 1.0  # 1% высоты для индикации низкого значения
+            bin_rect = patches.Rectangle(
+                (pos - 0.4, min_conf), 
+                0.8, 
+                error_bin_height,
+                facecolor=(0.8, 0.0, 0.0),  # Темно-красный цвет
+                edgecolor='black',
+                alpha=0.8,
+                linewidth=1.0,
+                hatch='///'  # Штриховка для выделения
+            )
+            ax_box.add_patch(bin_rect)
+            
+            # Добавляем текстовую метку с реальным значением
+            value_label = f"Low: {value:.1f}%"
+            ax_box.text(pos, min_conf - 2, value_label, 
+                      ha='center', va='top', fontsize=10, fontweight='bold', color='red',
+                      bbox=dict(facecolor='white', alpha=0.9, edgecolor='red', boxstyle='round,pad=0.2'))
+            
+            # Добавляем вертикальную пунктирную линию для подсветки модели с низким confidence
+            ax_box.axvline(x=pos, ymin=0, ymax=1, color='red', alpha=0.3, linestyle='--')
+        else:
+            # Получаем цвет бина в зависимости от значения
+            color = get_color_by_value(value, min_conf, max_conf, "confidence")
+            
+            # 1. Сначала рисуем цветной бин от min_value до текущего значения
+            bin_height = value - min_conf
+            bin_rect = patches.Rectangle(
+                (pos - 0.4, min_conf), 
+                0.8, 
+                bin_height,
+                facecolor=color, 
+                edgecolor=None,
+                alpha=0.8  # Непрозрачность как в legacy коде
+            )
+            ax_box.add_patch(bin_rect)
+            
+            # Подпись с текущим значением
+            value_label = f"{value:.1f}%"
+            ax_box.text(pos, value + (max_conf - min_conf) * 0.02, value_label, 
+                      ha='center', va='bottom', fontsize=12, fontweight='bold',
+                      bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
+            
+        # 2. Затем рисуем стандартный боксплот поверх
+        # Бокс
+        box_height = stats['q3'] - stats['q1']
+        box = patches.Rectangle(
+            (pos - 0.4, stats['q1']), 
+            0.8, 
+            box_height, 
+            facecolor='white', 
+            edgecolor='black', 
+            linewidth=1.5, 
+            alpha=0.3  # Прозрачность как в legacy коде
+        )
+        ax_box.add_patch(box)
+        
+        # Медиана
+        ax_box.hlines(stats['median'], pos - 0.4, pos + 0.4, colors='black', linewidth=2.0, alpha=0.5)
+        
+        # Усы
+        ax_box.vlines(pos, stats['q1'], stats['whislo'], colors='black', linewidth=1.5, alpha=0.4)
+        ax_box.vlines(pos, stats['q3'], stats['whishi'], colors='black', linewidth=1.5, alpha=0.4)
+        ax_box.hlines(stats['whislo'], pos - 0.2, pos + 0.2, colors='black', linewidth=1.5, alpha=0.4)
+        ax_box.hlines(stats['whishi'], pos - 0.2, pos + 0.2, colors='black', linewidth=1.5, alpha=0.4)
+    
+    # Настройка осей и подписей
+    ax_box.set_xticks(positions)
+    ax_box.set_xticklabels(model_names, fontsize=12)
+    ax_box.set_ylabel("Confidence (%)", fontsize=14)
+    # Добавляем имя файла в заголовок для проверки синхронизации
+    title_text = f"Confidence for: {object_class}"
+    if img_filename:
+        title_text += f" | {img_filename}"
+    ax_box.set_title(title_text, fontsize=16)
+    ax_box.grid(True, axis='y', linestyle='--', alpha=0.7)
+    
+    # Добавляем информацию о кадре
+    # Показываем прогресс анимации
+    if frame_idx in all_frames:
+        current_frame_number = all_frames.index(frame_idx)
+        progress = current_frame_number / max(1, (total_frames - 1))
+        frame_label = f"Frame: {frame_idx} (Progress: {progress*100:.1f}%)"
+    else:
+        frame_label = f"Frame: {frame_idx}"
+        
+    fig.suptitle(frame_label, fontsize=14, y=0.95)
+    
+    # Вместо plt.tight_layout() используем ручную настройку расположения осей
+    fig.subplots_adjust(top=0.88, bottom=0.12, left=0.08, right=0.95, wspace=0.2, hspace=0.2)
     
     return fig
 
@@ -388,164 +395,147 @@ def create_yolo_frame(
 def create_yolo_comparison_gif(
     seq_dir, baseline_results, tips_results=None, output_path=None,
     sequence="seq_0", fps=5, start_frame=0, end_frame=None, step=1,
-    slow_factor=3, fixed_size=(1200, 800), min_conf=75, max_conf=85
+    slow_factor=3, fixed_size=(16, 8), min_conf=75, max_conf=85,
+    object_class="object"
 ):
     """
-    Создает GIF-анимацию сравнения YOLO моделей с изображением и боксплотом
+    Создает GIF-анимацию сравнения YOLO моделей
     
     Args:
-        seq_dir: директория с последовательностями
-        baseline_results: путь к CSV с результатами baseline YOLO модели
-        tips_results: путь к CSV с результатами TIPS-YOLO модели
-        output_path: путь для сохранения GIF
-        sequence: идентификатор последовательности (например, 'seq_0')
-        fps: частота кадров в GIF
+        seq_dir: директория с последовательностями изображений
+        baseline_results: путь к CSV файлу с результатами базовой модели
+        tips_results: путь к CSV файлу с результатами TIPS модели
+        output_path: путь для сохранения GIF-анимации
+        sequence: ID последовательности
+        fps: кадров в секунду
         start_frame: начальный кадр
-        end_frame: конечный кадр (None = все)
+        end_frame: конечный кадр
         step: шаг между кадрами
-        slow_factor: коэффициент замедления
-        fixed_size: фиксированный размер кадра (ширина, высота)
-        min_conf: минимальное значение для оси Y боксплота
-        max_conf: максимальное значение для оси Y боксплота
+        slow_factor: коэффициент замедления (повторяет кадры)
+        fixed_size: фиксированный размер кадра (ширина, высота) в дюймах
+        min_conf: минимальное значение для оси Y боксплота (%)
+        max_conf: максимальное значение для оси Y боксплота (%)
+        object_class: класс объекта для отображения в заголовке
         
     Returns:
-        bool: True если успешно, False в случае ошибки
+        str: путь к созданной GIF-анимации
     """
-    # Сбрасываем настройки matplotlib для чистого рабочего окружения
-    plt.rcdefaults()
+    # Преобразуем пути
+    seq_dir = Path(seq_dir)
     
-    # Загружаем результаты моделей
-    baseline_df = load_csv_results(baseline_results)
-    if baseline_df is None:
-        return False
+    # Формируем имя выходного файла, если не указано
+    if output_path is None:
+        model_part = "baseline"
+        if tips_results:
+            model_part += "_vs_tips"
+        
+        output_path = f"yolo_{model_part}_{sequence}.gif"
     
-    has_tips = False
+    # Загружаем результаты
+    print(f"Загрузка результатов модели baseline из {baseline_results}")
+    baseline_data = load_csv_results(baseline_results)
+    
+    # Проверяем наличие TIPS результатов
     if tips_results:
-        tips_df = load_csv_results(tips_results)
-        has_tips = tips_df is not None
+        print(f"Загрузка результатов модели TIPS из {tips_results}")
+        tips_data = load_csv_results(tips_results)
+    else:
+        tips_data = None
     
-    # Находим кадры последовательности
-    selected_frames, selected_files = find_sequence_frames(
-        seq_dir, sequence, start_frame, end_frame, step
-    )
+    # Находим все кадры в последовательности
+    selected_frames, selected_files = find_sequence_frames(seq_dir, sequence, start_frame, end_frame, step)
+    print(f"Найдено {len(selected_frames)} кадров в последовательности {sequence}")
     
+    # Ничего не найдено - завершаем работу
     if not selected_frames:
-        return False
+        print(f"Ошибка: Не найдены изображения последовательности {sequence} в {seq_dir}")
+        return None
     
     print(f"Выбрано {len(selected_frames)} кадров для анимации")
     
-    # Создаем кадры для плавной анимации
-    if slow_factor > 1:
-        print(f"Применяем фактор замедления {slow_factor} для плавной анимации")
-        original_len = len(selected_frames)
-        total_frames = original_len * slow_factor
-        print(f"Всего кадров после замедления: {total_frames}")
-    else:
-        original_len = len(selected_frames)
-        total_frames = original_len
+    if not selected_frames:
+        print("Ошибка: Не найдены кадры для выбранного диапазона")
+        return None
     
-    # Создаем временную директорию для кадров GIF
-    tmp_dir = create_temp_directory(output_path, "tmp_yolo_gif")
+    # Создаем временную директорию для кадров
+    temp_dir = create_temp_directory("yolo_gif")
     
-    print(f"Генерация {total_frames} кадров анимации...")
+    # Создаем и сохраняем кадры
+    print("Создание кадров анимации...")
+    frames_for_gif = []
     
-    # Создаем отдельный кадр для каждого шага
-    valid_frames = []
-    
-    for idx in range(total_frames):
-        # Используем модульную арифметику для доступа к исходным кадрам
-        original_idx = idx % original_len
-        frame_idx = selected_frames[original_idx]
-        img_path = selected_files[original_idx]
+    for i, frame_idx in enumerate(selected_frames):
+        print(f"Обработка кадра {frame_idx} ({i+1}/{len(selected_frames)})", end="\r")
         
         # Загружаем изображение
-        img = load_image(img_path)
-        if img is None:
+        img_path = selected_files[i]
+        img_filename = os.path.basename(img_path)
+        if not os.path.exists(img_path):
+            print(f"Пропуск: Не найден файл {img_path}")
             continue
         
+        img = load_image(img_path)
+        
+        # Получаем данные для базовой модели, используя имя файла
         try:
-            # Получаем данные для текущего кадра из CSV
-            frame_prefix = img_path.name
-            
-            # Ищем строку в baseline результатах
-            baseline_row = None
-            
-            # Сначала пробуем найти по имени файла (если есть колонка 'frame')
-            if 'frame' in baseline_df.columns:
-                matched_rows = baseline_df[baseline_df['frame'] == frame_prefix]
-                if len(matched_rows) > 0:
-                    baseline_row = matched_rows.iloc[0]
-            
-            # Если не нашли по имени, используем индекс с проверкой границ
-            if baseline_row is None:
-                csv_idx = min(original_idx, len(baseline_df) - 1)
-                baseline_row = baseline_df.iloc[csv_idx]
-            
-            # Извлекаем данные
-            baseline_conf = baseline_row['confidence']
-            gt_bbox = parse_bbox_string(baseline_row['gt_bbox'])
-            baseline_bbox = parse_bbox_string(baseline_row['pred_bbox'])
-            
-            # Аналогично для tips, если доступно
+            baseline_row = baseline_data[baseline_data['frame'] == img_filename].iloc[0]
+            baseline_bbox = baseline_row['pred_bbox']  # Используем pred_bbox вместо bbox
+            baseline_conf = baseline_row['confidence'] * 100  # Преобразуем в проценты
+            gt_bbox = baseline_row['gt_bbox']
+        except (IndexError, KeyError) as e:
+            print(f"Ошибка: Не найдены данные для кадра {img_filename} в baseline: {e}")
+            # Проверяем соответствие значений в 'frame'
+            if 'frame' in baseline_data.columns:
+                print(f"Доступные значения в столбце 'frame': {baseline_data['frame'].unique()[:5]}...")
+            continue
+        
+        # Получаем данные для TIPS модели, если доступны
+        if tips_data is not None:
+            try:
+                tips_row = tips_data[tips_data['frame'] == img_filename].iloc[0]
+                tips_bbox = tips_row['pred_bbox']  # Используем pred_bbox вместо bbox
+                tips_conf = tips_row['confidence'] * 100  # Преобразуем в проценты
+            except (IndexError, KeyError) as e:
+                print(f"Ошибка: Не найдены данные для кадра {img_filename} в TIPS: {e}")
+                tips_bbox = None
+                tips_conf = None
+        else:
             tips_bbox = None
             tips_conf = None
-            
-            if has_tips:
-                tips_row = None
-                
-                # Сначала пробуем найти по имени файла
-                if 'frame' in tips_df.columns:
-                    matched_rows = tips_df[tips_df['frame'] == frame_prefix]
-                    if len(matched_rows) > 0:
-                        tips_row = matched_rows.iloc[0]
-                
-                # Если не нашли по имени, используем индекс с проверкой границ
-                if tips_row is None:
-                    csv_idx = min(original_idx, len(tips_df) - 1)
-                    tips_row = tips_df.iloc[csv_idx]
-                
-                tips_conf = tips_row['confidence']
-                tips_bbox = parse_bbox_string(tips_row['pred_bbox'])
-            
-            # Создаем кадр сравнения
-            fig = create_yolo_frame(
-                img, gt_bbox, baseline_bbox, baseline_conf,
-                tips_bbox, tips_conf,
-                min_conf, max_conf, frame_idx, total_frames,
-                fixed_size
-            )
-            
-            # Сохраняем кадр
-            tmp_frame_path = tmp_dir / f"frame_{idx:04d}.png"
-            fig.savefig(tmp_frame_path, dpi=100, bbox_inches='tight', 
-                        facecolor='white', edgecolor='none', pad_inches=0.1,
-                        format='png')
-            plt.close(fig)
-            
-            # Проверяем, создался ли файл
-            if os.path.exists(tmp_frame_path):
-                valid_frames.append(tmp_frame_path)
-            
-            # Для индикации прогресса
-            if (idx + 1) % 10 == 0:
-                print(f"Обработано {idx + 1}/{total_frames} кадров")
-                
-        except Exception as e:
-            import traceback
-            print(f"Ошибка при создании кадра {idx}: {e}")
-            traceback.print_exc()
-            continue
+        
+        # Создаем кадр
+        fig = create_yolo_frame(
+            img, gt_bbox, baseline_bbox, baseline_conf,
+            tips_bbox, tips_conf,
+            min_conf, max_conf, frame_idx, len(selected_frames),
+            all_frames=selected_frames, fixed_size=fixed_size,
+            object_class=object_class, img_filename=img_filename
+        )
+        
+        # Сохраняем кадр
+        frame_path = Path(temp_dir) / f"frame_{i:03d}.png"
+        fig.savefig(frame_path, dpi=100, bbox_inches='tight', pad_inches=0.1)
+        plt.close(fig)
+        
+        # Добавляем путь кадра в список
+        frames_for_gif.append(frame_path)
     
-    print(f"Успешно создано {len(valid_frames)} кадров")
-    if len(valid_frames) < 2:
-        print(f"Недостаточно кадров для создания GIF (создано {len(valid_frames)})")
-        cleanup_temp_directory(tmp_dir)
-        return False
+    print("\nВсе кадры созданы!")
     
     # Создаем GIF
-    result = save_gif_animation(valid_frames, output_path, fps)
+    if frames_for_gif:
+        # Если нужно замедление, дублируем кадры
+        if slow_factor > 1:
+            print(f"Применение slow_factor={slow_factor} для замедления анимации")
+            frames_for_gif = create_frames_for_gif(frames_for_gif, slow_factor=slow_factor)
+        
+        gif_path = save_gif_animation(frames_for_gif, output_path, fps=fps)
+        print(f"GIF-анимация сохранена в {gif_path}")
+    else:
+        gif_path = None
+        print("Ошибка: Не удалось создать кадры для GIF")
     
-    # Очищаем временную директорию
-    cleanup_temp_directory(tmp_dir)
+    # Очищаем временные файлы
+    cleanup_temp_directory(temp_dir)
     
-    return result 
+    return gif_path 
