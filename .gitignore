@@ -1,0 +1,34 @@
+# Пайтон кэш-файлы
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Виртуальные окружения
+venv/
+env/
+ENV/
+
+# Дистрибутивы и билды
+dist/
+build/
+*.egg-info/
+
+# Журналы и временные файлы
+*.log
+logs/
+tmp/
+temp/
+*/tmp_*/
+
+# Файлы IDE и редакторов
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Специфичные для проекта
+figures/tmp_frames/
+*.bak 
