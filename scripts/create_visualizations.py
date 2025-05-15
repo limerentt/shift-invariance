@@ -397,12 +397,7 @@ def create_comparison_gifs(args):
 
 
 def create_classifier_gifs(args):
-    """
-    Создает GIF-анимации сравнения классификаторов
-    
-    Args:
-        args: аргументы командной строки
-    """
+    """Создание GIF-анимаций сравнения классификаторов"""
     # Подготавливаем пути
     seq_dir = Path(args.seq_dir)
     results_dir = Path(args.results_dir)
@@ -495,11 +490,8 @@ def create_classifier_gifs(args):
             start_frame=args.start_frame,
             end_frame=args.end_frame,
             step=args.step,
-            fixed_size=fixed_size,
             min_value=min_value,
             max_value=max_value,
-            bg_color=args.bg_color,
-            enhancement_level=args.enhancement,
             object_class=args.object_class
         )
         
