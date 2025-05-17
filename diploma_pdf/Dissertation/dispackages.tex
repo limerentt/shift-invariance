@@ -5,7 +5,14 @@
 \usepackage{calc}               % Пакет для расчётов параметров, например длины
 %\usepackage{etoolbox}          % ради функции patchcmd для управления списком литературы
 
-\usepackage {interfaces-base}   % Набор базовых интерфейсов к некоторым пакетам, конкретные реализации загружаются в стиле
+%\usepackage {interfaces-base}   % Набор базовых интерфейсов к некоторым пакетам, конкретные реализации загружаются в стиле
+
+%%% Определение окружений для теорем и определений %%%
+\newtheorem{definition}{Определение}
+\newtheorem{theorem}{Теорема}
+\newtheorem{lemma}{Лемма}
+\newtheorem{proposition}{Утверждение}
+\newtheorem{corollary}{Следствие}
 
 %%% Заголовки %%%
 \usepackage{titlesec}           % Пакет настройки шрифтов заголовков в тексте

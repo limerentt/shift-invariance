@@ -1,0 +1,17 @@
+%%% Настройки формул по ГОСТ %%%
+% Формулы должны быть центрированы
+% Нумерация формул по схеме "глава.номер"
+% Интервалы - по одной строке до и после формулы
+
+% Настройки для центрирования формул
+\AtBeginDocument{
+  \abovedisplayskip=\baselineskip       % Отбивка сверху
+  \abovedisplayshortskip=\baselineskip  % Отбивка сверху для коротких формул
+  \belowdisplayskip=\baselineskip       % Отбивка снизу
+  \belowdisplayshortskip=\baselineskip  % Отбивка снизу для коротких формул
+}
+
+% Настройка нумерации формул
+% Если нужна нумерация вида "глава.номер", то убедитесь, что в setup.tex
+% счетчик contnumeq установлен на 0
+\numberwithin{equation}{chapter} 

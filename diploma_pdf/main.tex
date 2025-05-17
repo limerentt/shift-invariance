@@ -9,6 +9,7 @@
 \input{common/data}      % Основные сведения
 \input{common/styles}    % Стили общие для диссертации и автореферата
 \input{Dissertation/disstyles}           % Стили для диссертации
+\input{Dissertation/formulas}            % Настройки формул
 \input{Dissertation/userstyles}          % Стили для специфических пользовательских задач
 \input{biblio/predefined}
 
@@ -16,13 +17,16 @@
 
 \input{common/renames}                   % Переопределение именований
 
-\include{Dissertation/0_title}
-\include{Dissertation/1_annotation}
-\include{Dissertation/1_glossary}
-\tableofcontents
+\include{Dissertation/0_title}           % Титульный лист без номера
+\frontmatter                             % Нумерация римскими цифрами
+\include{Dissertation/1_annotation}      % Аннотация (i)
+\include{Dissertation/1_glossary}        % Список сокращений (ii)
+\tableofcontents                         % Оглавление (iii)
+\mainmatter                              % Нумерация арабскими цифрами
 \include{Dissertation/2_introduction}
 \include{Dissertation/3_field_review}
 \include{Dissertation/4_work}
+\include{Dissertation/5_experiment}      % Добавляем третью главу
 
 % \include{Dissertation/5_discussions}
 

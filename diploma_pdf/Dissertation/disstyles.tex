@@ -70,30 +70,39 @@
 \makeatother
 \pagestyle{fancy}                   % Меняем стиль оформления страниц
 \fancyhf{}                          % Очищаем текущие значения
-\fancyhead[C]{\thepage}             % Печатаем номер страницы на середине верхнего поля
+\fancyhead[R]{\thepage}             % Печатаем номер страницы вверху справа
 \renewcommand{\headrulewidth}{0pt}  % Убираем разделительную линию
+
+% Для нумерации страниц аннотации и содержания римскими цифрами
+\newcommand{\frontmatter}{
+  \pagenumbering{roman}
+}
+
+% Для основного текста, начиная с введения - арабские цифры
+\newcommand{\mainmatter}{
+  \pagenumbering{arabic}
+}
 
 %%% Оформление заголовков глав, разделов, подразделов %%%
 %% Работа должна быть выполнена ... размером шрифта 12-14 пунктов (ГОСТ Р 7.0.11-2011, 5.3.8). То есть не должно быть надписей шрифтом более 14. Так и поставим.
 %% Эти установки будут давать одинаковый результат независимо от выбора базовым шрифтом 12 пт или 14 пт
 \titleformat{\chapter}[block]                                % default display;  hang = with a hanging label. (Like the standard \section.); block = typesets the whole title in a block (a paragraph) without additional formatting. Useful in centered titles
-        {\hdngalign\fontsize{14pt}{16pt}\selectfont\bfseries}% 
-        %\fontsize{<size>}{<skip>} % второе число ставим 1.2*первое, чтобы адекватно отрабатывали команды по расчету полуторного интервала (домножая разные комбинации коэффициентов на этот)
-        {\thechapter\cftchapaftersnum}                       % Заголовки в оглавлении должны точно повторять заголовки в тексте (ГОСТ Р 7.0.11-2011, 5.2.3).
+        {\hdngalign\fontsize{14pt}{16pt}\selectfont\bfseries\MakeUppercase}% Шрифт 14pt, полужирный, прописными
+        {\thechapter~}                       % Неразрывный пробел после номера
         {0em}% отступ от номера до текста
         {}%
 
 \titleformat{\section}[block]                                % default hang;  hang = with a hanging label. (Like the standard \section.); block = typesets the whole title in a block (a paragraph) without additional formatting. Useful in centered titles
         {\hdngalign\fontsize{14pt}{16pt}\selectfont\bfseries}% 
         %\fontsize{<size>}{<skip>} % второе число ставим 1.2*первое, чтобы адекватно отрабатывали команды по расчету полуторного интервала (домножая разные комбинации коэффициентов на этот)
-        {\thesection\cftsecaftersnum}                        % Заголовки в оглавлении должны точно повторять заголовки в тексте (ГОСТ Р 7.0.11-2011, 5.2.3).
+        {\thesection~}                        % Неразрывный пробел после номера
         {0em}% отступ от номера до текста
         {}%
 
 \titleformat{\subsection}[block]                             % default hang;  hang = with a hanging label. (Like the standard \section.); block = typesets the whole title in a block (a paragraph) without additional formatting. Useful in centered titles
         {\hdngalign\fontsize{14pt}{16pt}\selectfont\bfseries}% 
         %\fontsize{<size>}{<skip>} % второе число ставим 1.2*первое, чтобы адекватно отрабатывали команды по расчету полуторного интервала (домножая разные комбинации коэффициентов на этот)
-        {\thesubsection\cftsubsecaftersnum}                  % Заголовки в оглавлении должны точно повторять заголовки в тексте (ГОСТ Р 7.0.11-2011, 5.2.3).
+        {\thesubsection~}                  % Неразрывный пробел после номера
         {0em}% отступ от номера до текста
         {}%
 
