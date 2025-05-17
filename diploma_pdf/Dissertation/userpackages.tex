@@ -9,3 +9,32 @@
 
 % Русская традиция начертания греческих букв
 %\usepackage{upgreek} % прямые греческие ради русской традиции
+
+%%% Пользовательские пакеты и настройки
+% Пакеты для решения проблемы с символами в PDF
+\usepackage{etex}  % Расширенные возможности TeX
+\usepackage{fix-cm}  % Исправления для Computer Modern шрифтов
+
+% Настройки для предотвращения проблем с символами =8000
+\ifxetexorluatex
+    % Дополнительные настройки для XeTeX/LuaTeX
+    \usepackage{fontspec}
+    \usepackage{unicode-math}
+\else
+    % Дополнительные настройки для pdfLaTeX
+    \usepackage[T1,T2A]{fontenc}  % Явно указываем кодировки шрифтов
+    \usepackage{textcomp}  % Дополнительные текстовые символы
+\fi
+
+% Увеличение размеров памяти TeX
+\makeatletter
+\AtBeginDocument{
+    \newcount\my@repeat
+    \my@repeat=10
+    \loop
+    \advance\my@repeat -1
+    \ifnum\my@repeat>0
+    % Пустые операции для предварительной загрузки некоторых структур
+    \repeat
+}
+\makeatother
