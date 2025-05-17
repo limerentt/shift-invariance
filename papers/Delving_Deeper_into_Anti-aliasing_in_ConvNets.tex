@@ -1,0 +1,229 @@
+% !TEX encoding = UTF-8 Unicode
+%-------------------------------------------------------------------------------
+%  Diploma Thesis Section — Detailed Summary of
+%  “Delving Deeper into Anti‑aliasing in ConvNets” (BMVC 2020)
+%  by Xueyan Zou, Fanyi Xiao, Zhiding Yu, Yong Jae Lee
+%-------------------------------------------------------------------------------
+%  This LaTeX fragment is self‑contained: it defines labels, equations, tables and
+%  figure placeholders that can be referenced from the main thesis. Insert your
+%  own graphics (.pdf/.png) for each \includegraphics command.
+%-------------------------------------------------------------------------------
+
+%===============================  SECTION  =====================================
+
+\section{Адаптивный антиалиасинг в свёрточных сетях}
+\label{sec:adaptive_aa}
+
+\subsection{Проблема aliasing при субсемплировании}
+
+Aliasing — искажение высокочастотных компонент сигнала при субсемплировании, 
+когда частота дискретизации ниже удвоенной максимальной частоты (теорема Найквиста).
+В контексте CNN проблема особенно остра, т.к. down‑sampling (страйдовые свертовки,
+Max\slash Avg Pool) применяется каскадно. Без предварительного низкочастотного
+фильтра выход становится вариативным при сдвигах входа, снижая точность и robustness.
+
+\paragraph{Фиксированный Blur \citep{Zhang2020ShiftInvariant}.} Вставка гауссовского
+фильтра до субсемплирования (BlurPool) частично решает задачу, но одинаковый фильтр
+не адаптируется к неоднородным частотам внутри фич‑карт.
+
+\paragraph{Цель работы \citep{Zou2020AntiAliasing}.} Научиться 
+\emph{контент‑зависимому} низкочастотному фильтрационному слою, который предсказывает
+\textbf{разные} фильтры:
+\begin{enumerate*}[label=\alph*)]
+  \item для \textit{каждой} пространственной позиции $(i,j)$;\\[-4pt]
+  \item для групп каналов $g\in\{1,\dots,G\}$.
+\end{enumerate*}
+Такой слой подключается перед \emph{каждым} down‑sampling‑блоком сети.
+
+\subsection{Математическая формулировка}
+\label{sec:aa_math}
+
+Пусть входная фича $X\in\mathbb R^{N\times C\times H\times W}$ 
+($N$ — батч, $C$ — каналы), далее разбиваем каналы на $G$ групп по $C_g=C/G$.
+Для каждой позиции $(i,j)$ и группы $g$ предсказывается фильтр
+$w_{i,j,g}\in\mathbb R^{k\times k}$ (обычно $k=3$). Положительность и нормировка
+
+\begin{equation}
+ w_{i,j,g}[p,q] \ge 0, \quad \sum_{p,q} w_{i,j,g}[p,q] = 1\,,
+ \label{eq:filter_constraints}
+\end{equation}
+
+обеспечивают свойство \emph{low‑pass}.
+
+\paragraph{Пространственно‑групповая свёртка.} 
+Выход слоя
+\begin{equation}
+Y^{g}_{i,j}=\sum_{p,q\in\Omega} w^{g}_{i,j}[p,q] 
+              \; X^{c}_{i+p,\,j+q},
+\qquad c\in\bigl[gC_g,(g+1)C_g\bigr),
+\label{eq:spatial_group_conv}
+\end{equation}
+где $\Omega$ — окно размера $k\times k$.
+
+\paragraph{Генерация весов.} Весы фильтра предсказываются небольшой CNN:
+\begin{equation}
+ w = \operatorname{softmax}_\text{chan}\bigl(\operatorname{BN}(\operatorname{Conv}_{1\times1}(X))\bigr)
+ \in \mathbb R^{N\times G\times k^2\times H\times W},
+\label{eq:weight_pred}
+\end{equation}
+где \texttt{softmax}\(_\text{chan}\) применяется по $k^2$ каналам, реализуя
+\eqref{eq:filter_constraints}.
+
+\subsection{Сравнение вариантов фильтрации}
+
+\begin{table}[t]
+  \centering
+  \caption{Абасляционное сравнение типов фильтров (ResNet‑18, ImageNet 112\,px).}
+  \label{tab:ablation_filters}
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    \textbf{Метод} & Top‑1 \% & Consistency \% \\
+    \midrule
+    ResNet‑18 (no AA) & 66.5 & 79.1 \\
+    Gaussian (fixed) & 66.7 & 79.8 \\
+    Image Adaptive (глоб.) & 66.7 & 78.7 \\
+    Spatial Adaptive & 67.7 & 80.3 \\
+    \textbf{Proposed (spatial + group)} & \textbf{68.0} & \textbf{80.9} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Табл.~\ref{tab:ablation_filters} повторяет абляции авторов: 
+адаптация по пространству и каналам даёт наибольший выигрыш.
+
+\subsection{Метрики консистентности}
+
+\paragraph{Image‑level.} 
+\begin{equation}
+ \mathrm{Cons}(F)=\mathbb E_{X,\Delta}
+  \bigl[\mathbb I\bigl[\arg\max F(X)=\arg\max F(\mathrm{Shift}_{\Delta}X)\bigr]\bigr].
+\end{equation}
+
+\paragraph{Instance Consistency (mAISC).} 
+См. рис.~\ref{fig:maisc_scheme}. Для двух кропов $A,B$ изображения считаем 
+долю предсказанных масок, совпадающих при IOU\,$>0.9$ в пересечении областей.
+
+\paragraph{Semantic Consistency (mASSC).} 
+Для тех же кропов доля пикселей, где предсказанные классы совпали.
+
+\begin{figure}[t]
+  \centering
+  % Placeholder for Figure 5 scheme
+  \fbox{\includegraphics[width=.8\linewidth]{fig_maisc_scheme.pdf}}
+  \caption{Схема вычисления mAISC и mASSC.
+  Вырезаем две области изображения, сравниваем пересечение.}
+  \label{fig:maisc_scheme}
+\end{figure}
+
+\subsection{Результаты}
+
+\paragraph{ImageNet \citep{Deng2009ImageNet}.}
+
+\begin{table}[t]
+  \centering
+  \caption{Classification, shift‑consistency и generalization (ImageNet \(\rightarrow\) ImageNet VID).}
+  \label{tab:imagenet_main}
+  \begin{tabular}{@{}lcccc@{}}
+    \toprule
+    \multirow{2}{*}{\textbf{Метод}} & \multicolumn{2}{c}{\textbf{ImageNet}} & \multicolumn{2}{c}{\textbf{VID gen.}}\\
+    \cmidrule(lr){2-3} \cmidrule(l){4-5}
+     & Acc & Cons. & Acc & $\Delta$ Acc\\
+    \midrule
+    ResNet‑101 & 77.7 & 90.6 & 67.6 & 0.0\\
+    LPF (3\,x\,3) & 78.4 & 91.6 & 68.8 & +1.2\\
+    LPF (5\,x\,5) & 77.7 & 91.8 & 67.0 & –0.6\\
+    \textbf{Proposed (3\,x\,3)} & \textbf{79.0} & 91.8 & \textbf{69.9} & +2.3\\
+    Proposed (5\,x\,5) & 78.6 & \textbf{92.2} & 69.1 & +1.5\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Адаптивный фильтр даёт +1.3 п.п. к Top‑1 и +0.2–0.4 п.п. к Consistency 
+на ImageNet (табл.~\ref{tab:imagenet_main}). Перенос на другой домен (видео)
+усиливается ещё сильнее (+2.3 п.п.).
+
+\paragraph{Instance Segmentation (MS‑COCO).}
+
+\begin{table}[t]
+  \centering
+  \caption{Mask R‑CNN, MS‑COCO val2017.}
+  \label{tab:coco}
+  \begin{tabular}{@{}lcccc@{}}
+    \toprule
+    \textbf{Метод} & mAP\textsubscript{mask} & $\Delta$ & mAISC\textsubscript{mask} & $\Delta$\\
+    \midrule
+    Mask R‑CNN & 36.1 & – & 62.9 & –\\
+    LPF & 36.8 & +0.7 & 66.0 & +3.1\\
+    \textbf{Proposed} & \textbf{37.2} & +1.1 & \textbf{67.0} & +4.1\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Semantic Segmentation (PASCAL VOC \& Cityscapes).}
+
+\begin{table}[t]
+  \centering
+  \caption{DeepLab v3+ (ResNet‑101). mIOU и mASSC.}
+  \label{tab:seg}
+  \begin{tabular}{@{}lcccc@{}}
+    \toprule
+     & \multicolumn{2}{c}{PASCAL VOC} & \multicolumn{2}{c}{Cityscapes}\\
+    \cmidrule(lr){2-3} \cmidrule(l){4-5}
+     & mIOU & mASSC & mIOU & mASSC\\
+    \midrule
+    Deeplab v3+ & 78.5 & 95.5 & 78.5 & 96.0\\
+    LPF & 79.4 & 95.9 & 78.9 & 96.1\\
+    \textbf{Proposed} & \textbf{80.3} & \textbf{96.0} & \textbf{79.5} & \textbf{96.3}\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Качественный анализ}
+
+\begin{figure}[t]
+  \centering
+  % Placeholder for qualitative Cityscapes examples (Fig.~7)
+  \fbox{\includegraphics[width=.9\linewidth]{fig_cityscapes_qual.pdf}}
+  \caption{Сегментация Cityscapes: авторский метод лучше сохраняет контуры.
+  Красным выделены области, где baseline теряет детали.}
+  \label{fig:cityscapes_qual}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  % Placeholder for filter weight visualisation (Fig.~8)
+  \fbox{\includegraphics[width=.8\linewidth]{fig_filter_vis.pdf}}
+  \caption{Визуализация весов фильтров $3\times3$ для разных позиций. Более однородные
+  (синий) веса — сильное размытие для шумного фона; веса с выраженным центром —\n  сохранение деталей (края).}
+  \label{fig:filter_vis}
+\end{figure}
+
+\subsection{Анализ ресурсоёмкости}
+
+Дополнительные параметры: $+2.9$–$7.8\,\%$ к базовой сети (4.63 М \emph{vs.}
+4.50 М для ResNet‑101). Время инференса (RTX 2070, 224\,px): 6.4 мс против 4.3 мс.
+
+\subsection{Выводы раздела}
+
+Предложен \textbf{Adaptive Anti‑aliasing (AA)} слой, предсказывающий контент‑зависимые
+низкочастотные фильтры. Он:
+\begin{itemize}
+  \item повышает Top‑1 на ImageNet до \SI{79}{\percent} без костылей аугментации;
+  \item увеличивает shift‑consistency (+0.2–0.4 п.п.) и mAISC/mASSC (+1–5 п.п.);
+  \item улучшает generalization на другие домены (ImageNet VID);
+  \item минимально увеличивает сложность и не требует изменения веса ядра
+  свёртки или пулинга.
+\end{itemize}
+
+\subsection*{Библиография данного раздела}
+\begin{enumerate*}[label=\arabic*.]
+  \item Zou X., Xiao F., Yu Z., Lee Y.J. \textit{Delving Deeper into Anti‑aliasing in ConvNets}. BMVC 2020.
+  \item Zhang R. \textit{Making Convolutional Networks Shift‑Invariant Again}. ICML 2019.
+  \item Deng J. \textit{et al.} \textit{ImageNet: A Large‑Scale Hierarchical Image Database}. CVPR 2009.
+  \item He K. \textit{et al.} \textit{Deep Residual Learning for Image Recognition}. CVPR 2016.
+  \item Lin T.Y. \textit{et al.} \textit{Microsoft COCO: Common Objects in Context}. ECCV 2014.
+  \item Cordts M. \textit{et al.} \textit{The Cityscapes Dataset}. CVPR 2016.
+  \item Chen L.C. \textit{et al.} \textit{Encoder‑Decoder with Atrous Separable Convolution}. ECCV 2018.
+\end{enumerate*}
+
+%=========================== END SECTION =====================================

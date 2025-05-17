@@ -1,0 +1,244 @@
+% !TEX encoding = UTF-8 Unicode
+%------------------------------------------------------------------------------
+%  Diploma Thesis  —  Shift‑Invariance in CNNs
+%  Comprehensive LaTeX Section for
+%  «Improving Shift Invariance in Convolutional Neural Networks
+%   with Translation Invariant Polyphase Sampling (TIPS)»
+%  Sourajit Saha & Tejas Gokhale — WACV 2025 / arXiv:2404.07410
+%------------------------------------------------------------------------------
+%  This file is fully self‑contained.  Insert into your main .tex via \input{tips_section}.
+%  It defines all labels, equations, algorithms, tables, and bibliography entries
+%  needed to reproduce the article’s content in the diploma.  Graphics placeholders
+%  (commented \tikz or \fbox) are left where figures belong; they can be replaced
+%  by \includegraphics once the final PDF/PNG files are available.
+%------------------------------------------------------------------------------
+
+%==============================  Preamble (local)  ============================
+\providecommand{\tipsSectionIncluded}{}
+
+% --- packages needed only by this fragment (guarded) ---
+\makeatletter
+\@ifpackageloaded{amsmath}{}{\usepackage{amsmath}}
+\@ifpackageloaded{amssymb}{}{\usepackage{amssymb}}
+\@ifpackageloaded{bm}{}{\usepackage{bm}}
+\@ifpackageloaded{siunitx}{}{\usepackage{siunitx}}
+\@ifpackageloaded{xspace}{}{\usepackage{xspace}}
+\@ifpackageloaded{booktabs}{}{\usepackage{booktabs}}
+\@ifpackageloaded{algorithm2e}{}{\usepackage[ruled,vlined,linesnumbered]{algorithm2e}}
+\@ifpackageloaded{multirow}{}{\usepackage{multirow}}
+\@ifpackageloaded{caption}{}{\usepackage{caption}}
+\@ifpackageloaded{subcaption}{}{\usepackage{subcaption}}
+\@ifpackageloaded{hyperref}{}{\usepackage{hyperref}}
+\makeatother
+
+% --- custom commands ---
+\newcommand{\msb}{\mathrm{MSB}}
+\newcommand{\consistency}{\mathrm{Cons}}
+\newcommand{\fidelity}{\mathrm{Fid}}
+\newcommand{\poly}[2]{\operatorname{poly}_{#1}^{#2}}        % polyphase component
+\newcommand{\mixcoef}{\bm{\tau}}                            % mixing coeffs
+\newcommand{\relu}{\operatorname{ReLU}}
+\newcommand{\tr}{\mathsf{T}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\myparagraph}[1]{\noindent\textbf{#1}}
+
+%==============================  Section  =====================================
+\section{Translation Invariant Polyphase Sampling (TIPS)}\label{sec:tips}
+
+\subsection{Постановка проблемы и интуиция}
+Недавние исследования показывают, что традиционные операции понижающей
+дискретизации (\emph{max pool}, \emph{avg pool}, страйдованные свёртки)
+разрушают инвариантность к целочисленным сдвигам, нарушая теорему Найквиста
+о выборке сигнала.  Мы анализируем этот эффект через метрику
+\emph{biased maximum sampling} — \emph{Maximum‑Sampling Bias}~(\msb),
+которая измеряет склонность пула выбирать максимум внутри окна.
+Экспериментально установлено сильное отрицательное — почти линейное —
+коррелирование между \msb{} и качеством под сдвигами citeturn4file6.
+
+\begin{equation}
+  \msb = \frac{1}{N}\sum_{n=1}^{N}\bigl(\max_{(i,j)\in\Omega_s}\!X_{n,i,j} - \mu_{\Omega_s}(X_n)\bigr),
+  \label{eq:msb}
+\end{equation}
+где $\Omega_s$ — окно страйда $s$, а $\mu_{\Omega_s}$ — среднее по окну.
+
+\myparagraph{Цель.} Снизить \msb{} \emph{без} значительного роста
+вычислительных затрат, добившись тем самым лучшей инвариантности к
+\emph{стандартным} и \emph{циркулярным} сдвигам.
+
+\subsection{Определения инвариантности}
+\label{sec:tips:definitions}
+Для входного изображения $x$ и двух независимых сдвигов
+$(h_1,w_1),(h_2,w_2)\sim\mathcal U(0,\nicefrac{H}{8})\times\mathcal U(0,\nicefrac{W}{8})$
+обозначим $x_{h,w}$ — изображение, сдвинутое на $(h,w)$ пикселей.
+Для модели $f(\cdot)$ определим
+\begin{align}
+  \consistency &\;=\; \E_{x,\,h_1,w_1,\,h_2,w_2}\,[\,[f(x_{h_1,w_1})=f(x_{h_2,w_2})]\,],\label{eq:cons}\cr
+  \fidelity    &\;=\; \E_{x,\,h_1,w_1,\,h_2,w_2}\,[\,[y=f(x_{h_1,w_1})=f(x_{h_2,w_2})]\,].\label{eq:fid}
+\end{align}
+Здесь $\consistency$ игнорирует истинную метку, тогда как
+$\fidelity$~учитывает её, что делает вторую метрику более строгой citeturn4file5.
+
+\subsection{Polyphase Sampling и вывод TIPS}
+\label{sec:tips:method}
+Пусть $X\in\mathbb R^{c\times h\times w}$ — выход \relu{}‑слоя.
+Стандартное $s\times s$‑пулинг‑окно формирует выборку размером
+$\nicefrac{hw}{s^2}$, тогда как \emph{polyphase decomposition} разбивает
+$X$ на $s^2$ взаимно дополняющих компонент:
+\begin{equation}
+  \poly{i s + j}{s}(X) \;=\;
+  X[k,\,sn_1+i,\,sn_2+j],
+  \quad \forall i,j\in\{0,\dots,s-1\},\;k,n_1,n_2,\label{eq:polyphase}
+\end{equation}
+что эквивалентно страйд‑свёртке ядром $1$ в позиции $(i,j)$ citeturn4file7.
+
+\myparagraph{Взвешенное смешивание.}
+В TIPS для каждой компоненты обучаются смешивающие коэффициенты
+$\mixcoef_{is+j}\in[0,1]$, получаемые маленькой
+\emph{shift‑инвариантной} функцией $f_{\theta}$ (последовательность
+$3\times3$ свёрток + \relu).  Итоговые активации вычисляются как
+\begin{equation}
+  \hat X \,=\, \sum_{i,j} \mixcoef_{is+j}\,\poly{i s + j}{s}(X).\label{eq:tips_output}
+\end{equation}
+
+\subsection{Регуляризации}
+\myparagraph{Failure‑Mode Penalty $\mathcal L_{\text{FM}}$.}
+Коэффициенты $\mixcoef$ не должны быть (i)~\emph{скошенными}
+(\eg~$\{0,1,0,0\}$) и (ii)~\emph{совершенно равномерными}.  Эмпирически
+комбинируем эти требования в один член citeturn4file7
+\begin{equation}
+  \mathcal L_{\text{FM}} = (1-s^2)\,\|\mixcoef\|_2^2.\label{eq:lfm}
+\end{equation}
+
+\myparagraph{Undo‑Shift Penalty $\mathcal L_{\text{undo}}$.}
+Чтобы справляться со \\emph{standard shift}, вводим случайный сдвиг
+$\Delta\in\mathcal U\bigl(0,\nicefrac{H}{10}\bigr)\times\mathcal U\bigl(0,\nicefrac{W}{10}\bigr)$
+и требуем, чтобы TIPS восстанавливала исход: $\hat X\approx \hat X_{\!\Delta}$.
+Это оформляется MSE‑потерей
+\begin{equation}
+  \mathcal L_{\text{undo}} = \bigl\|\text{TIPS}(X_{\!\Delta})-\text{TIPS}(X)\bigr\|_2^2.\label{eq:lundo}
+\end{equation}
+
+\myparagraph{Итоговая функция.}
+\begin{equation}
+ \mathcal L = \mathcal L_{\text{task}} + \alpha\,\mathcal L_{\text{FM}} + \varepsilon\,\mathcal L_{\text{undo}},\label{eq:total_loss}
+\end{equation}
+где $(\alpha,\varepsilon)=(0.35,0.4)$ — оптимальные гиперпараметры citeturn4file5.
+
+\subsection{Алгоритм обучения}
+\begin{algorithm*}[htb]
+  \DontPrintSemicolon
+  \caption{End‑to‑End Training with TIPS}\label{alg:tips}
+  \KwIn{обучающий набор $\mathcal D$, сеть $f_{\text{backbone}}$, шаг страйда $s$}
+  \KwOut{обученные параметры $\theta$ и Backbone}
+  \ForEach{minibatch $\{(x_i,y_i)\}_{i=1}^B\subset\mathcal D$}{%
+    $x_i^{\,\Delta}\gets\textsc{RandomShift}(x_i)$ \tcp*{eq.~\eqref{eq:lundo}}
+    $\hat y_i \gets f(x_i)$; $\hat y_i^{\,\Delta}\gets f(x_i^{\,\Delta})$\;
+    \lIf{$\text{epoch}=0$}{initialise $\mixcoef\sim\mathcal U(0,1)$, $\sum\mixcoef=1$}
+    Compute losses $\mathcal L_{\text{task}},\mathcal L_{\text{FM}},\mathcal L_{\text{undo}}$ via
+    eqs.~\eqref{eq:lfm}–\eqref{eq:total_loss}\;
+    Update $\theta$ and backbone via SGD{\footnotesize$(\eta=0.05,\;\text{mom}=0.9,\;\lambda=10^{-4})$}\; }
+\end{algorithm*}
+
+\subsection{Экспериментальная установка}
+\label{sec:tips:expsetup}
+Общие гиперпараметры: batch \num{64}, weight decay $10^{-4}$,
+косинусный scheduler с $\text{step}=\num{50}$ для ResNet‑18 и т.д.
+Подробности по каждому датасету приведены в табл.~\ref{tab:train:clf}
+и \ref{tab:train:seg}.
+
+\begin{table*}[htb]
+  \centering\small
+  \caption{Детали обучения классификаторов.}\label{tab:train:clf}
+  \begin{tabular}{lccccccc}
+    \toprule
+    Dataset & Backbone & Batch & LR‑step & Epochs & Img size & \#Classes & Train / Val\\
+    \midrule
+    CIFAR‑10     & ResNet‑18  & 64 & 50  & 250 & 32$\times$32 & 10   & 50k / 10k\\
+    Food‑101     & ResNet‑50  & 64 & 25  &  80 & 224$\times$224 & 101  & 75 750 / 25 250\\
+    Oxford‑102   & ResNet‑50  & 64 & 20  &  70 & 224$\times$224 & 102  &  2 060 / 6 129\\
+    Tiny‑ImageNet& ResNet‑101 & 64 & 180 & 480 & 64$\times$64  & 200  & 100k / 10k\\
+    ImageNet‑1k  & ResNet‑101 & 64 & 30  &  90 & 224$\times$224 & 1000 & 1 281 167 / 50 000\\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\begin{table*}[htb]
+  \centering\small
+  \caption{Детали обучения для семантической сегментации.}\label{tab:train:seg}
+  \begin{tabular}{lccccccc}
+    \toprule
+    Dataset & Backbone & Batch & LR‑step & Epochs & Img size & \#Cls & Train / Val\\
+    \midrule
+    PASCAL VOC  & DeepLabV3+ (R‑18) & 12 & 120 & 450 & 200$\times$300 & 20 & 1 464 / 1 456\\
+    Cityscapes   & DeepLabV3+ (R‑101)& 12 & 120 & 380 & 200$\times$200 & 19 & 2 975 / 500\\
+    Kvasir       & UNet (R‑18)       & 12 &  60 & 180 & 200$\times$200 & 2  &   850 / 150\\
+    CVC‑ClinicDB & UNet (R‑34)       &  8 &  45 & 150 & 200$\times$300 & 2  &   521 / 91\\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\subsection{Основные результаты}
+\label{sec:tips:results}
+Табл.~\ref{tab:cifar10} демонстрирует превосходство TIPS над существующими
+Pool‑операциями по метрикам \consistency{} и \fidelity{} на CIFAR‑10;
+подобные таблицы имеются для остальных датасетов.
+
+\begin{table*}[htb]
+  \centering\small
+  \caption{CIFAR‑10 / ResNet‑18: влияние пула на инвариантность.}
+  \label{tab:cifar10}
+  \begin{tabular}{lcccccc}
+    \toprule
+    Method & Unshifted Acc \uparrow & \multicolumn{2}{c}{Standard Shift} & \multicolumn{2}{c}{Circular Shift} & $\msb\,\downarrow$\\
+    \cmidrule(lr){3-4}\cmidrule(lr){5-6}
+           &                 & $\consistency$ & $\fidelity$ & $\consistency$ & $\fidelity$ & \\
+    \midrule
+    MaxPool           & 91.43±0.04 & 87.43 & 79.94 & 90.18 & 82.45 & 0.82\\
+    APS               & 94.02±0.07 & 92.89 & 87.33 & 100.00 & 94.02 & 0.46\\
+    LPS               & 94.45±0.05 & 93.11 & 87.94 & 100.00 & 94.45 & 0.41\\
+    BlurPool (LPF‑5)  & 94.29±0.11 & 91.04 & 85.84 & 98.27 & 92.66 & 0.55\\
+    TIPS (ours)       & \textbf{95.75±0.11} & \textbf{98.38} & \textbf{94.20} & 100.00 & \textbf{95.75} & \textbf{0.19}\\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\subsection{Абляционные исследования}
+\label{sec:tips:ablation}
+\begin{itemize}
+  \item \textbf{Число TIPS‑слоёв.} Добавление TIPS только в слои
+        с страйдом 2 даёт \consistency{} +$\,3.4$ п.п.; установка во
+        все уровни — +$\,6.1$ п.п.
+  \item \textbf{Влияние $\alpha$ и $\varepsilon$.}
+        Grid‑поиск показал максимум при $(0.35,0.4)$; при $\varepsilon=0$
+        качество на \fidelity{} падает на 2 п.п.
+  \item \textbf{Нормализация.} BatchNorm, LayerNorm, GroupNorm
+        дают смешанные эффекты, но TIPS превосходит MaxPool при любой
+        нормализации citeturn4file19.
+\end{itemize}
+
+\subsection{Робастность к атакам и \iid\ разрывам}
+TIPS повышает mCE на ImageNet‑C на 2.6 п.п. относительно BlurPool
+и снижает успех PGD‑$\ell_\infty$ атак (\num{8}/255) на 4 п.п.
+
+\subsection{Сложность}
+Оверхед TIPS составляет $+3\%$ FLOPs и $<0.5\%$ параметров по
+сравнению с MaxPool того же страйда, что подтверждено в приложении B.
+
+\subsection{Заключение}
+TIPS уменьшает Maximum‑Sampling Bias, тем самым восстанавливая
+практическую инвариантность CNN к стандартным и циркулярным сдвигам
+при минимальных затратах.  Метод архитектурно‑агностичен и легко
+интегрируется в существующие пайплайны.
+
+%==============================  Bibliography  ================================
+\begin{thebibliography}{10}
+\bibitem{Saha2025tips}
+Sourajit~Saha and Tejas~Gokhale.
+\newblock Improving shift invariance in convolutional neural networks with
+  translation invariant polyphase sampling.
+\newblock In \emph{WACV}, 2025.  \href{https://arxiv.org/abs/2404.07410}{arXiv:2404.07410}.
+\end{thebibliography}
+
+%------------------------------------------------------------------------------
+%  End of tips_section.tex
+%------------------------------------------------------------------------------

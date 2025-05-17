@@ -1,0 +1,156 @@
+% !TEX encoding = UTF-8 Unicode
+%-------------------------------------------------------------------------------
+%  Diploma Thesis Section — Detailed Summary of
+%  “Making Convolutional Networks Shift‑Invariant Again” (ICML 2019)
+%  by Richard Zhang et al.
+%-------------------------------------------------------------------------------
+%  This LaTeX fragment is self‑contained: it defines labels, equations, tables and
+%  figure placeholders that can be referenced from the main thesis. Insert your
+%  own graphics (.pdf/.png) for each \includegraphics command.
+%-------------------------------------------------------------------------------
+
+%===============================  SECTION  =====================================
+
+\section{Инвариантность к сдвигам в свёрточных сетях}
+\label{sec:shift_invariance}
+
+\subsection{Постановка проблемы}
+Современные CNN‑архитектуры (AlexNet, VGG, ResNet, MobileNet и~др.) теряют \emph{строгую} инвариантность к целочисленным сдвигам входа: смещение картинки даже на~$1\,$px способно менять выходной вектор классов либо пространственное расположение предсказанных объектов. Источник проблемы — страйдовые свертовки, пулинг и~любое субсемплирование без антиалиасинга. Итог — \textbf{aliasing}: неоднозначное сопоставление высокочастотного сигнала узкой полосе частот после дискретизации, приводящее к неэквивариантному поведению.
+
+\subsection{Формальные определения}
+Для изображения $X \in \mathbb R^{H\times W\times3}$ и функции признаков $\tilde F: \mathbb R^{H\times W\times3} \to \mathbb R^{H'\times W'\times C}$ введём циклический сдвиг (``roll'')
+\begin{equation}
+\mathrm{Shift}_{\Delta h,\,\Delta w}(X)_{h, w, c} = X_{(h-\Delta h) \bmod H,\,(w-\Delta w) \bmod W,\, c}.
+\end{equation}
+\paragraph{Shift‑equivariance} выполняется, если
+\begin{equation}
+\mathrm{Shift}_{\Delta h,\,\Delta w}\bigl(\tilde F(X)\bigr) \;=\; \tilde F\bigl(\mathrm{Shift}_{\Delta h,\,\Delta w}(X)\bigr), \quad \forall\, \Delta h, \Delta w.\label{eq:eqv}
+\end{equation}
+\paragraph{Shift‑invariance} (с пространственностью обнулённой до $1\times1$) требует
+\begin{equation}
+\tilde F(X) = \tilde F\bigl(\mathrm{Shift}_{\Delta h,\,\Delta w}(X)\bigr), \quad \forall\, \Delta h, \Delta w.\label{eq:inv}
+\end{equation}
+При наличии страйдов условия \eqref{eq:eqv}–\eqref{eq:inv} ослабляются до \emph{periodic‑$N$ equivariance}: эквивариантность сохраняется лишь для сдвигов, кратных $N=2^k$, где $k$ — число субсемплирований.
+
+\subsection{Антиалиасинговая модификация BlurPool}
+\begin{figure}[t]
+  \centering
+  % Replace with actual illustration of Fig.~3 from the paper
+  \fbox{\includegraphics[width=.9\linewidth]{fig_antialias_scheme.pdf}}
+  \caption{Схема антиалиасинга для down‑sampling‑операторов. BlurPool (зелёный) добавляет свёртку с\,/низкочастотным фильтром $g_{m\times m}$ перед субсемплированием.}
+  \label{fig:blurpool_scheme}
+\end{figure}
+
+Рассмотрим исходный MaxPool с ядром $k$ и страйдом $s$:
+\begin{equation}
+\mathrm{MaxPool}_{k,s} = \underbrace{\mathrm{Subsample}_{s}}_{\text{теряет эквивариантность}} \circ \underbrace{\mathrm{Max}_{k,1}}_{\text{эквивариантно}},
+\end{equation}
+где $\circ$ — композиция. Вставим \emph{низкочастотный фильтр}~$g$ размером $m\times m$ между двумя операциями:
+\begin{equation}
+\mathrm{MaxPool}_{k,s} \;\longrightarrow\; \mathrm{Subsample}_{s} \circ \mathrm{Blur}_{g} \circ \mathrm{Max}_{k,1} = \mathrm{BlurPool}_{m,s} \circ \mathrm{Max}_{k,1}.\label{eq:maxblur}
+\end{equation}
+
+Аналогично:
+\begin{align}
+\mathrm{Conv}_{k,s} &\to \mathrm{BlurPool}_{m,s} \circ \mathrm{ReLU} \circ \mathrm{Conv}_{k,1},\label{eq:convblur}\\[4pt]
+\mathrm{AvgPool}_{k,s} &\to \mathrm{BlurPool}_{m,s}.\label{eq:avgblur}
+\end{align}
+
+\paragraph{Выбор фильтра.} Исследованы фильтры:
+\begin{itemize}
+  \item\textbf{Rectangle‑2}\,: $[1,1]^{\otimes2}$ — эквивалент box‑пулингу.
+  \item\textbf{Triangle‑3}\,: $[1,2,1]^{\otimes2}$ — двукратная свёртка box‑фильтра (bilinear).
+  \item\textbf{Binomial‑$m$}\,: строки бинома Ньютона $[1,4,6,4,1], \dots$ (Laplacian pyramid).
+\end{itemize}
+Фильтры нормируются на $\sum g_{ij}=1$.
+
+\subsection{Экспериментальные тестбенчи}
+\paragraph{CIFAR‑10.} 50 к обуч/10 к валидационных изображений $32\times32$. Модификации VGG13‑bn и DenseNet‑40‑12 с 5 MaxPool и 2 AvgPool соответственно.
+
+\paragraph{ImageNet‑1k.} 1.2 М изображений $(224\times224)$, 1000 классов. Тестируются AlexNet, VGG‑16, ResNet‑50, DenseNet‑121, MobileNet‑v2. Оценка robustness: ImageNet‑C/P.
+
+\paragraph{Labels$\to$Facades~(pix2pix).} Генерация $256\times256$ снимков из карта‑лейблов. Метрика стабильности — PSNR совпадения вывода при сдвиге.
+
+\subsection{Метрики}
+\begin{enumerate}
+  \item \textbf{Classification Accuracy (Acc).}
+  \item \textbf{Consistency} — доля соглашений по классу на случайных сдвигах.
+  \item \textbf{Feature Distance} $\,d(F,\Delta h,\Delta w)=\lVert F(X)-F(\mathrm{Shift}_{\Delta h,\,\Delta w}X)\rVert_2$.
+  \item \textbf{Generation PSNR} $\mathrm{PSNR}( \mathrm{Shift}_\Delta F(X), F(\mathrm{Shift}_\Delta X) )$.
+\end{enumerate}
+
+\subsection{Результаты на CIFAR‑10}
+\begin{table}[t]
+  \centering
+  \caption{Точность и консистентность классификации CIFAR‑10 (VGG13‑bn, DenseNet‑40‑12). Значения взяты из Tab.~5 статьи.}
+  \label{tab:cifar_results}
+  \begin{tabular}{@{}llcccc@{}}
+    \toprule
+    & & \multicolumn{2}{c}{\bf Train w/o aug.} & \multicolumn{2}{c}{\bf Train w/ aug.}\\
+    \cmidrule(lr){3-4} \cmidrule(l){5-6}
+    \bf Arch. & \bf Filter & Acc & Cons. & Acc & Cons.\\
+    \midrule
+    VGG & Baseline (Δ‑1) & 91.6 & 88.1 & 93.8 & 96.6\\
+        & Triangle‑3 & 93.1 & 93.9 & 93.6 & 98.0\\
+        & Binomial‑7 & 93.0 & 98.1 & 93.2 & 98.8\\
+    \addlinespace
+    Dense & Baseline (Rect‑2) & 93.0 & 94.8 & 94.4 & 97.7\\
+          & Binomial‑7 & 94.5 & 98.8 & 94.6 & 98.9\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Как видно из табл.~\ref{tab:cifar_results}, фильтры большего размера повышают консистентность (до $98.8\%$) при минимальной потере точности.
+
+\subsection{Анализ внутренних признаков}
+\begin{figure}[t]
+  \centering
+  % Replace with heatmaps analogous to Fig.~5(a,b)
+  \fbox{\includegraphics[width=.48\linewidth]{fig_vgg_heat_base.pdf}}
+  \hfill
+  \fbox{\includegraphics[width=.48\linewidth]{fig_vgg_heat_blur.pdf}}
+  \caption{Тепловые карты отклонений от идеальной эквивариантности по слоям VGG13‑bn: (слева) базовая сеть, (справа) с MaxBlurPool~(Bin‑5). Синий — нулевая ошибка, красный — наихудшая.}
+  \label{fig:vgg_heat}
+\end{figure}
+
+Рис.~\ref{fig:vgg_heat} демонстрирует ступенчатое ухудшение эквивариантности после каждого пулинга; BlurPool выравнивает карту и сохраняет периодичность меньших порядков.
+
+\subsection{ImageNet и устойчивость к коррупциям}
+\begin{figure}[t]
+  \centering
+  % placeholder for top‑1 vs. consistency scatter (Fig.~7)
+  \fbox{\includegraphics[width=.7\linewidth]{fig_imagenet_scatter.pdf}}
+  \caption{Соотношение точности Top‑1 и консистентности на ImageNet для разных фильтров и архитектур. BlurPool сдвигает облака в правый верхний угол.}
+  \label{fig:imagenet_scatter}
+\end{figure}
+
+BlurPool повышает консистентность до $\approx97\%$ без статистически значимого ухудшения Top‑1. Кроме того, модели становятся устойчивее к дисторсиям из ImageNet‑C/P — средняя mCE падает на $\sim3$ п.п.
+
+\subsection{Генерация изображений (pix2pix)}
+\begin{figure}[t]
+  \centering
+  % placeholder for pix2pix shift PSNR graphs
+  \fbox{\includegraphics[width=.9\linewidth]{fig_pix2pix_shift.pdf}}
+  \caption{PSNR совпадения результатов генерации при горизонтальных сдвигах входа ($\pm8$ px). Anti‑aliased U‑Net держит PSNR \textgreater{} 30 dB, в то время как базовая падает до $\sim$20 dB.}
+  \label{fig:pix2pix}
+\end{figure}
+
+\subsection{Заключение раздела}
+BlurPool — простая, дифференцируемая вставка low‑pass фильтра перед любым субсемплированием. Она:
+\begin{itemize}
+  \item восстанавливает (периодическую) эквивариантность к сдвигам;
+  \item повышает консистентность выходов на $\uparrow10$ п.п.;
+  \item улучшает robustness к коррупциям (ImageNet‑C/P) и генеративных моделей;
+  \item требует \textless{}$1\%$ накладных вычислений.
+\end{itemize}
+
+\subsection*{Библиография данного раздела}
+\begin{enumerate*}[label={\arabic*.}]
+  \item Zhang R., Isola P., Efros A., Shechtman E., Wang O. \textit{Making Convolutional Networks Shift‑Invariant Again}. ICML 2019.
+  \item Hendrycks D. \textit{et al.} Benchmarking Robustness on ImageNet with Corruptions and Perturbations. ICML 2019.
+  \item Simonyan K., Zisserman A. \textit{Very Deep Convolutional Networks for Large‑Scale Image Recognition}. ICLR 2015.
+  \item Huang G. \textit{et al.} Densely Connected Convolutional Networks. CVPR 2017.
+  \item Krizhevsky A., Hinton G. \textit{Learning Multiple Layers of Features from Tiny Images}. Tech. report 2009.
+\end{enumerate*}
+
+%=========================== END SECTION ======================================

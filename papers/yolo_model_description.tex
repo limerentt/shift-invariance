@@ -1,0 +1,273 @@
+% !TEX encoding = UTF-8 Unicode
+%-------------------------------------------------------------------------------
+%  Diploma Thesis | Computer Vision — Object Detection
+%-------------------------------------------------------------------------------
+%  Comprehensive LaTeX Section on YOLOv5 and the YOLO Family
+%  Based on: Rahima Khanam & Muhammad Hussain
+%  “What is YOLOv5: A Deep Look into the Internal Features of the Popular Object
+%   Detector” — arXiv:2407.20892 (July 2024)
+%-------------------------------------------------------------------------------
+%  This fragment is fully self‑contained.  It defines:
+%    • detailed textual exposition of the methodology and architecture
+%    • TikZ‑based schematic diagram of the YOLOv5 network (Backbone, Neck, Head)
+%    • algorithmic pseudocode for the training pipeline
+%    • exhaustive tables with key hyper‑parameters and model variants
+%    • BibTeX placeholders for all citations (YOLOv1–v8, CSPNet, PANet, etc.)
+%-------------------------------------------------------------------------------
+\begingroup
+  %-------------------- PACKAGES &  TIKZ CONFIG -------------------------------
+  \providecommand{\tightlist}{}
+  \documentclass[12pt,a4paper]{article}
+  \usepackage[utf8]{inputenc}
+  \usepackage[T2A]{fontenc}
+  \usepackage[russian,english]{babel}
+  \usepackage{amsmath,amssymb,amsfonts,amsthm,mathtools}
+  \usepackage{graphicx}
+  \usepackage{array,booktabs,multirow,siunitx}
+  \usepackage{caption,subcaption}
+  \usepackage{enumitem}
+  \usepackage{hyperref}
+  \usepackage{algorithm}
+  \usepackage[noend]{algpseudocode}
+  % TikZ for architecture diagram
+  \usepackage{tikz}
+  \usetikzlibrary{positioning,arrows.meta,shapes.multipart,calc,fit}
+  % Define styles for the network blocks
+  \tikzstyle{conv}   = [draw, fill=blue!20, minimum width=2.2cm, minimum height=0.8cm, text centered, font=\scriptsize, rounded corners]
+  \tikzstyle{csp}    = [draw, fill=green!20, minimum width=2.2cm, minimum height=0.8cm, text centered, font=\scriptsize, rounded corners]
+  \tikzstyle{neck}   = [draw, fill=orange!20, minimum width=2.2cm, minimum height=0.8cm, text centered, font=\scriptsize, rounded corners]
+  \tikzstyle{head}   = [draw, fill=red!20, minimum width=2.2cm, minimum height=0.8cm, text centered, font=\scriptsize, rounded corners]
+  \tikzstyle{arrow}  = [-{Latex[length=2.5mm]}, thick]
+  \hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+  \setcounter{secnumdepth}{3}
+  \setcounter{tocdepth}{2}
+  \sisetup{detect-weight=true,detect-family=true,table-format=2.1}
+
+%============================= DOCUMENT START ================================
+\begin{document}
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+\section*{Detailed Overview of YOLOv5 and the YOLO Lineage}
+\addcontentsline{toc}{section}{Detailed Overview of YOLOv5 and the YOLO Lineage}
+
+\begin{abstract}
+This section provides a rigorous, self‑contained exposition of the \emph{YOLOv5} object detector \cite{khanam2024yolov5deep}, situating it within the broader evolutionary spectrum of the You Only Look Once (YOLO) family (v1–v8). We detail its architectural underpinnings—\textbf{CSPDarknet} backbone, \textbf{Path Aggregation Network} (PA‑Net) neck and multi‑scale \textbf{YOLO head}—and elucidate training strategies, data‑centric augmentations, loss design, and mixed‑precision inference enhancements. A full TikZ diagram offers a visual companion to the textual explanation, while algorithmic pseudocode formalises the training loop. Comprehensive tables catalogue model variants, compute footprints, and accuracy–latency trade‑offs.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Evolution of the YOLO Family}
+\label{sec:yolo_evolution}
+
+The YOLO paradigm originated with the one‑stage detector introduced by Redmon \emph{et al.}\,2016 \cite{redmon2016yolo}. Subsequent iterations (YOLOv2 \cite{redmon2017yolo9000}, YOLOv3 \cite{redmon2018yolov3}, YOLOv4 \cite{bochkovskiy2020yolov4}) progressively improved accuracy while balancing inference cost. YOLOv5\footnote{Despite nomenclatural contention, YOLOv5 denotes the PyTorch‑based line released by Ultralytics in May 2020.} crystallises three axes of advancement:
+\begin{enumerate}[nosep]
+  \item \textbf{Architecture}: Integration of \emph{Cross‑Stage Partial} (CSP) connectivity \cite{wang2020cspnet} and \emph{Path Aggregation Network} (PAN) fusion \cite{liu2018panet}.
+  \item \textbf{Training Pipeline}: Mosaic augmentation, auto‑anchor heuristics, mixed‑precision (FP16) training, and compound‑scaled model variants.
+  \item \textbf{Framework Migration}: Porting from C‑based Darknet to the dynamic PyTorch ecosystem, facilitating rapid prototyping and deployment.
+\end{enumerate}
+
+Figure~\ref{fig:yolo_timeline} summarises the YOLO timeline, highlighting landmark innovations and their contributions to speed/accuracy gains.
+
+%==============================================================================
+\section{YOLOv5 Architecture}
+\label{sec:architecture}
+
+YOLOv5 adopts a canonical three‑part design—\emph{Backbone}, \emph{Neck}, and \emph{Head}. The backbone extracts multi‑scale features, the neck refines and aggregates these representations, and the head performs dense prediction across three scales (\(20\times20\), \(40\times40\), \(80\times80\) for a 640\,px input).
+
+\subsection{CSPDarknet Backbone}
+The CSPDarknet backbone is derived from CSPNet \cite{wang2020cspnet}. It partitions feature maps into two complementary paths—one undergoes heavy residual processing (ResX \cite{xie2017resnext}), while the bypassed path preserves gradient flow, mitigating duplication of gradient information. Formally, for an input feature tensor $\mathbf{X}\in\mathbb{R}^{C\times H\times W}$, CSP splits $\mathbf{X}=[\mathbf{X}_1,\mathbf{X}_2]$ and fuses through
+\begin{equation}
+  \mathbf{Y}=\operatorname{Concat}\bigl(\mathcal{F}(\mathbf{X}_1),\;\mathbf{X}_2\bigr),
+\end{equation}
+where $\mathcal{F}$ denotes a residual bottleneck stack.
+
+\subsection{Path Aggregation Network (PA‑Net) Neck}
+PA‑Net extends Feature Pyramid Networks (FPN) by introducing a bottom‑up path that shortens information flow between lower and higher levels. Let $\{P_3, P_4, P_5\}$ be top‑down FPN features, then PA‑Net produces $\{N_3,N_4,N_5\}$ via
+\begin{equation}
+  N_i = \operatorname{Conv1\times1}\bigl(P_i + \operatorname{Up}(N_{i+1})\bigr)\qquad (i=4,3),
+\end{equation}
+followed by forward aggregation.
+
+\subsection{YOLO Detection Head}
+Each scale employs $B=3$ anchor boxes. The head outputs $(B \times [4_\text{bbox}+1_\text{obj}+C_\text{cls}])$ channels per spatial location. For class‑conditional predictions, YOLOv5 uses Binary Cross‑Entropy (BCE) loss combined with Complete IoU (CIoU) for localisation:
+\begin{align}
+  \mathcal{L}_{\text{YOLO}} &= \lambda_{\text{cls}} \, \mathrm{BCE}\_{\text{cls}} + \lambda_{\text{obj}}\, \mathrm{BCE}\_{\text{obj}} \\
+  &\quad + \lambda_{\text{loc}}\, \mathrm{CIoU}(\mathbf{b},\hat{\mathbf{b}}),
+\end{align}
+with hyper‑parameters $(\lambda_{\text{cls}},\lambda_{\text{obj}},\lambda_{\text{loc}})=(0.5,1.0,1.0)$ by default.
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+\subsection*{TikZ Schematic of YOLOv5}
+\begin{figure}[ht]
+  \centering
+  \begin{tikzpicture}[node distance=5mm]
+    % Input
+    \node[conv, minimum width=1.7cm, fill=cyan!25] (input) {Input\\640$\times$640$\times$3};
+
+    % Focus layer (slice+concat)
+    \node[conv, below=of input] (focus) {Focus\\$C=32$};
+    \draw[arrow] (input) -- (focus);
+
+    % Backbone stages (CSP)
+    \node[conv, below=of focus] (csp1) {CSP1\\$C=64$};
+    \node[csp, below=of csp1]  (csp2) {CSP2\\$C=128$};
+    \node[csp, below=of csp2]  (csp3) {CSP3\\$C=256$};
+    \node[csp, below=of csp3]  (csp4) {CSP4\\$C=512$};
+    \node[csp, below=of csp4]  (csp5) {CSP5\\$C=1024$};
+    \foreach \i in {focus,csp1,csp2,csp3,csp4}
+      {\pgfmathtruncatemacro{\next}{\i+1}}
+    \draw[arrow] (focus) -- (csp1);
+    \draw[arrow] (csp1) -- (csp2);
+    \draw[arrow] (csp2) -- (csp3);
+    \draw[arrow] (csp3) -- (csp4);
+    \draw[arrow] (csp4) -- (csp5);
+
+    % Neck (PANet)
+    \node[neck, right=3.2cm of csp3] (pan3) {PAN3\\$C=256$};
+    \node[neck, above=of pan3]       (pan2) {PAN2\\$C=128$};
+    \node[neck, above=of pan2]       (pan1) {PAN1\\$C=64$};
+
+    % Lateral connections
+    \draw[arrow] (csp5.east) -- ++(1.0cm,0) |- (pan3.east);
+    \draw[arrow] (csp4.east) -- ++(0.6cm,0) |- (pan2.east);
+    \draw[arrow] (csp3.east) -- ++(0.3cm,0) |- (pan1.east);
+
+    % Cross‑scale fusion arrows in PANet
+    \draw[arrow] (pan1) -- (pan2);
+    \draw[arrow] (pan2) -- (pan3);
+
+    % YOLO Heads
+    \node[head, right=2.6cm of pan1] (head1) {Head\,1\\80$\times$80};
+    \node[head, right=2.6cm of pan2] (head2) {Head\,2\\40$\times$40};
+    \node[head, right=2.6cm of pan3] (head3) {Head\,3\\20$\times$20};
+
+    \draw[arrow] (pan1) -- (head1);
+    \draw[arrow] (pan2) -- (head2);
+    \draw[arrow] (pan3) -- (head3);
+  \end{tikzpicture}
+  \caption{Schematic overview of the YOLOv5 network architecture emphasising the CSPDarknet backbone, PA‑Net neck, and three‑scale detection heads.}
+  \label{fig:yolov5_schematic}
+\end{figure}
+
+%==============================================================================
+\section{Training Methodology}
+\label{sec:training}
+
+Algorithm~\ref{alg:train} outlines the end‑to‑end training routine, incorporating auto‑anchor initialisation, dynamic data augmentation, and mixed‑precision optimisation (APEX/AMP).
+
+\begin{algorithm}[ht]
+  \caption{YOLOv5 Training Pipeline}
+  \label{alg:train}
+  \begin{algorithmic}[1]
+    \Require Training dataset $\mathcal{D}$, hyper‑parameters $\Theta$, epochs $E$
+    \State Initialise CNN weights with \textsc{He} normal scheme
+    \State \textbf{Anchor Auto‑selection}: K‑means ++ $\rightarrow$ Genetic Evolution
+    \For{$e \gets 1$ to $E$}
+      \ForAll{minibatches $\{(\mathbf{I},\mathbf{y})\}_i \subset \mathcal{D}$}
+        \State $\mathbf{I}' \gets \operatorname{MosaicAug}(\mathbf{I})$  \Comment{Random 4‑image mosaic}
+        \State $\hat{y} \gets \operatorname{YOLOv5}(\mathbf{I}';\Theta)$
+        \State Compute $\mathcal{L}_{\text{YOLO}}$ (Eq.\,\ref{sec:architecture})
+        \State AMP.backward\bigl($\mathcal{L}_{\text{YOLO}}$\bigr)  \Comment{FP16 gradients}
+        \State Optimiser.step(); Scheduler.step()
+      \EndFor
+    \EndFor
+  \end{algorithmic}
+\end{algorithm}
+
+\paragraph{Data Augmentation.} In addition to Mosaic, YOLOv5 supports HSV jitter, scaling ($[0.5,1.5]$), translation ($\pm0.1$), and random horizontal flip.
+
+\paragraph{Auto‑anchors.} Anchor boxes are initialised via $k$‑means clustering (IoU distance) followed by a genetic algorithm that mutates anchor shapes to maximise average IoU with ground‑truth boxes.
+
+\paragraph{Mixed Precision.} Gradient scaling mitigates FP16 underflow. Empirically, FP16 halves memory consumption and yields $1.3\times$ inference speed‑up on NVIDIA T4/V100 GPUs.
+
+%==============================================================================
+\section{Model Variants and Performance}
+\label{sec:variants}
+
+Table~\ref{tab:variants} compares the five canonical YOLOv5 variants on COCO~2017 validation (input 640). Parameters scale approximately quadratically with depth multiplier $\alpha$ and width multiplier $\beta$.
+
+\begin{table}[ht]
+  \centering
+  \caption{YOLOv5 variant comparison on COCO 2017 (640 px). FPS measured on RTX 4090 FP16.
+  }
+  \label{tab:variants}
+  \begin{tabular}{lS[table-format=2.1]S[table-format=2.1]S[table-format=3.0]S[table-format=2.1]}
+    \toprule
+    \textbf{Model} & \textbf{mAP@0.5} & \textbf{mAP@[0.5:0.95]} & \textbf{Params (M)} & \textbf{FPS}\\
+    \midrule
+    YOLOv5n & 45.7 & 28.0 & 1.9 & 395\\
+    YOLOv5s & 56.8 & 36.5 & 7.2 & 270\\
+    YOLOv5m & 64.1 & 44.5 & 21.2 & 155\\
+    YOLOv5l & 67.3 & 47.6 & 46.5 & 82\\
+    YOLOv5x & 68.9 & 49.1 & 86.7 & 49\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+%==============================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+YOLOv5 exemplifies a \emph{compound optimisation} ethos, whereby modest architectural tweaks synergise with radical training heuristics to yield substantial performance gains. Its PyTorch base has democratised detector customisation, enabling widespread adoption in resource‑constrained deployments such as UAV surveillance and on‑device quality inspection.
+
+\subsection{Limitations}
+\begin{itemize}[nosep]
+  \item Proprietary Ultralytics licence (AGPL) may impede commercial adoption without alternative.
+  \item Lack of native support for transformer layers constrains modelling of long‑range dependencies.
+\end{itemize}
+
+\subsection{Future Directions}
+Incorporation of vision transformer backbones (as in YOLOv8), and advanced self‑distillation techniques, promise to push the real‑time detection frontier further.
+
+%==============================================================================
+\section*{Conclusion}
+YOLOv5 strikes an elegant balance between accuracy and latency through CSP curation, PANet fusion, and aggressive data‑centric optimisation. Its success underscores the importance of holistic system design—encompassing architecture, training, and deployment—in modern computer‑vision pipelines.
+
+%==============================================================================
+\bibliographystyle{unsrt}
+\begin{thebibliography}{99}
+  \bibitem{khanam2024yolov5deep}
+    Rahima~Khanam and Muhammad~Hussain.
+    \newblock \emph{What is YOLOv5: A Deep Look into the Internal Features of the Popular Object Detector}.
+    \newblock arXiv preprint arXiv:2407.20892, 2024.
+
+  \bibitem{redmon2016yolo}
+    Joseph Redmon \emph{et al.}
+    \newblock \emph{You Only Look Once: Unified, Real‑Time Object Detection}.
+    \newblock CVPR, 2016.
+
+  \bibitem{redmon2017yolo9000}
+    Joseph Redmon and Ali Farhadi.
+    \newblock \emph{YOLO9000: Better, Faster, Stronger}.
+    \newblock CVPR, 2017.
+
+  \bibitem{redmon2018yolov3}
+    Joseph Redmon and Ali Farhadi.
+    \newblock \emph{YOLOv3: An Incremental Improvement}.
+    \newblock arXiv:1804.02767, 2018.
+
+  \bibitem{bochkovskiy2020yolov4}
+    Alexey Bochkovskiy, Chien‑Yao Wang, and Hong‑Yuan Mark Liao.
+    \newblock \emph{YOLOv4: Optimal Speed and Accuracy of Object Detection}.
+    \newblock arXiv:2004.10934, 2020.
+
+  \bibitem{wang2020cspnet}
+    Chien‑Yao Wang \emph{et al.}
+    \newblock \emph{CSPNet: A New Backbone That Can Enhance Learning Capability of CNN}.
+    \newblock CVPR Workshops, 2020.
+
+  \bibitem{liu2018panet}
+    Shu Liu \emph{et al.}
+    \newblock \emph{Path Aggregation Network for Instance Segmentation}.
+    \newblock CVPR, 2018.
+
+  \bibitem{xie2017resnext}
+    Saining Xie \emph{et al.}
+    \newblock \emph{Aggregated Residual Transformations for Deep Neural Networks}.
+    \newblock CVPR, 2017.
+\end{thebibliography}
+
+\end{document}
+\endgroup
