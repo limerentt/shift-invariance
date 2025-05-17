@@ -92,7 +92,7 @@ def create_frame_with_legacy_style(
         all_frames: список всех номеров кадров
         models_data: словарь {model_name: all_values} для всех моделей
         models_current: словарь {model_name: current_value} для текущего кадра
-        metric: метрика для визуализации ("cos_sim" или "conf_drift")
+        metric: метрика для визуализации ("cos_sim", "conf_drift" или "confidence")
         min_value: минимальное значение для оси Y
         max_value: максимальное значение для оси Y
         fixed_size: фиксированный размер фигуры (ширина, высота) в дюймах
@@ -127,6 +127,14 @@ def create_frame_with_legacy_style(
         display_data = {model: np.array(values) * 100 for model, values in models_data.items()}
         y_label = "Confidence Drift (%)"
         title = f"Confidence Drift for: {object_class}"
+    elif metric == "confidence":
+        # Преобразуем confidence [0-1] в проценты [0-100]
+        display_min = min_value * 100
+        display_max = max_value * 100
+        display_values = {model: value * 100 for model, value in models_current.items()}
+        display_data = {model: np.array(values) * 100 for model, values in models_data.items()}
+        y_label = "Confidence (%)"
+        title = f"Confidence for: {object_class}"
     else:
         # Для других метрик
         display_min = min_value 
@@ -138,13 +146,14 @@ def create_frame_with_legacy_style(
     
     # Настраиваем график боксплотов
     ax_box.set_ylim(display_min, display_max)
-    ax_box.set_xlim(0.5, 3.5)
     
     # Позиции боксплотов и их метки
-    positions = [1, 2, 3]
+    model_names = list(models_data.keys())
+    num_models = len(model_names)
+    positions = list(range(1, num_models + 1))
+    ax_box.set_xlim(0.5, num_models + 0.5)
     
     # Сокращаем длинные имена для компактности
-    model_names = list(models_data.keys())
     display_labels = []
     for name in model_names:
         if "ResNet" in name:
@@ -220,7 +229,7 @@ def create_frame_with_legacy_style(
         ax_box.hlines(stats['whishi'], pos - 0.2, pos + 0.2, colors='black', linewidth=1.5, alpha=0.4)
         
         # Подпись с текущим значением
-        if metric == "cos_sim" or metric == "conf_drift":
+        if metric == "cos_sim" or metric == "conf_drift" or metric == "confidence":
             value_label = f"{value:.1f}%"
         else:
             value_label = f"{value:.2f}"
@@ -270,7 +279,7 @@ def create_classifier_comparison_gif(
         model_results: словарь {model_name: csv_path} с результатами моделей
         output_path: путь для сохранения GIF
         sequence: имя последовательности
-        metric: метрика для визуализации ("cos_sim" или "conf_drift")
+        metric: метрика для визуализации ("cos_sim", "conf_drift" или "confidence")
         fps: частота кадров в GIF
         start_frame: начальный кадр
         end_frame: конечный кадр (None для всех кадров)
@@ -415,7 +424,7 @@ if __name__ == "__main__":
     parser.add_argument("--results_dir", type=str, required=True, help="Directory with classifier results")
     parser.add_argument("--out_path", type=str, help="Output GIF path")
     parser.add_argument("--sequence", type=str, default="seq_0", help="Sequence name")
-    parser.add_argument("--metric", type=str, default="cos_sim", choices=["cos_sim", "conf_drift"], 
+    parser.add_argument("--metric", type=str, default="cos_sim", choices=["cos_sim", "conf_drift", "confidence"], 
                         help="Metric to visualize")
     parser.add_argument("--model_base", type=str, default="ResNet50", 
                         choices=["ResNet50", "VGG16"], help="Base model type")
@@ -425,18 +434,33 @@ if __name__ == "__main__":
     parser.add_argument("--step", type=int, default=1, help="Frame step")
     parser.add_argument("--slow_factor", type=int, default=3, help="Slow factor")
     parser.add_argument("--min_value", type=float, default=None, 
-                        help="Minimum value for y-axis (default: 0.7 for cos_sim, 0.0 for conf_drift)")
+                        help="Minimum value for y-axis (default: 0.7 for cos_sim, 0.0 for conf_drift, 0.7 for confidence)")
     parser.add_argument("--max_value", type=float, default=None, 
-                        help="Maximum value for y-axis (default: 1.0 for cos_sim, 0.3 for conf_drift)")
+                        help="Maximum value for y-axis (default: 1.0 for cos_sim, 0.3 for conf_drift, 1.0 for confidence)")
     parser.add_argument("--object_class", type=str, default="sparrow", help="Object class name")
     
     args = parser.parse_args()
     
     # Устанавливаем значения min_value и max_value по умолчанию в зависимости от метрики
     if args.min_value is None:
-        args.min_value = 0.7 if args.metric == "cos_sim" else 0.0
+        if args.metric == "cos_sim":
+            args.min_value = 0.7
+        elif args.metric == "conf_drift":
+            args.min_value = 0.0
+        elif args.metric == "confidence":
+            args.min_value = 0.7
+        else:
+            args.min_value = 0.0
+
     if args.max_value is None:
-        args.max_value = 1.0 if args.metric == "cos_sim" else 0.3
+        if args.metric == "cos_sim":
+            args.max_value = 1.0
+        elif args.metric == "conf_drift":
+            args.max_value = 0.3
+        elif args.metric == "confidence":
+            args.max_value = 1.0
+        else:
+            args.max_value = 1.0
     
     # Формируем словарь с путями к данным моделей
     model_results = {
