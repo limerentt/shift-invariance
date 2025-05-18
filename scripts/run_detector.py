@@ -7,8 +7,12 @@
 import os
 import argparse
 from pathlib import Path
+from tqdm import tqdm
 
-from scripts.detection import load_yolo_model, run_detector_on_sequences
+from scripts.detection import (
+    load_yolo_model, load_aa_yolo_model, load_tips_yolo_model,
+    run_detector_on_sequences, load_ground_truth, process_single_sequence
+)
 from scripts.utils import find_sequence_ids
 
 
@@ -49,63 +53,120 @@ def parse_args():
         "--compute-metrics", action="store_true",
         help="Вычислить и вывести метрики после детекции"
     )
+    parser.add_argument(
+        "--device", type=str, default="cpu",
+        help="Устройство для загрузки модели (cpu, cuda, mps)"
+    )
+    parser.add_argument(
+        "--model-type", type=str, default="base",
+        choices=["base", "aa", "tips"],
+        help="Тип модели: base = стандартная YOLO, aa = anti-aliased YOLO, tips = TIPS-YOLO"
+    )
     
     return parser.parse_args()
 
 
-def main():
-    """Основная функция"""
-    args = parse_args()
+def process_sequence(model, seq_dir, seq_id, out_dir, prefix, compute_metrics=False, gt_data=None, conf_threshold=0.25):
+    """
+    Обрабатывает одну последовательность изображений
     
-    # Преобразуем пути в объекты Path
-    weights_path = Path(args.weights)
-    seq_dir = Path(args.seq_dir)
-    out_dir = Path(args.out_dir)
-    
-    # Создаем выходную директорию, если её нет
+    Args:
+        model: модель YOLO
+        seq_dir: директория с последовательностями
+        seq_id: идентификатор последовательности
+        out_dir: директория для сохранения результатов
+        prefix: префикс для имен выходных файлов
+        compute_metrics: вычислять ли метрики
+        gt_data: данные ground truth
+        conf_threshold: порог уверенности для детекций
+    """
+    # Создаем выходную директорию
     os.makedirs(out_dir, exist_ok=True)
     
-    # Проверка наличия последовательностей
-    sequences = find_sequence_ids(seq_dir)
-    if not sequences:
-        print(f"Ошибка: Не найдены последовательности в {seq_dir}")
-        return
+    # Имя выходного файла с результатами
+    output_csv = os.path.join(out_dir, f"{prefix}_{seq_id}.csv")
     
-    print(f"Найдены последовательности: {sequences}")
-    
-    # Разбираем список классов
-    class_filter = args.classes.split(',') if args.classes else None
-    
-    # Загружаем модель
-    print(f"Загрузка модели из {weights_path}...")
-    model = load_yolo_model(weights_path)
-    if model is None:
-        print("Ошибка: Не удалось загрузить модель")
-        return
-    
-    # Запускаем детектор на последовательностях
-    print(f"Запуск YOLO на последовательностях из {seq_dir}...")
-    results = run_detector_on_sequences(
+    # Запускаем детектор на последовательности
+    results = process_single_sequence(
         model, 
-        seq_dir, 
-        out_dir, 
-        class_filter, 
-        args.conf, 
-        args.prefix
+        os.path.join(seq_dir),
+        seq_id,
+        output_csv,
+        gt_data=gt_data,
+        conf_threshold=conf_threshold
     )
     
     # Выводим метрики
-    if args.compute_metrics and results:
-        print("\nМетрики детекции по последовательностям:")
-        from scripts.detection import compute_metrics_for_all_sequences
+    if compute_metrics and results:
+        from scripts.detection import compute_metrics
         
-        metrics = compute_metrics_for_all_sequences(results)
-        for seq_id, seq_metrics in metrics.items():
-            print(f"\n{seq_id}:")
-            print(f"  IoU: {seq_metrics['avg_iou']:.4f} ± {seq_metrics['std_iou']:.4f}")
-            print(f"  Пропуски: {seq_metrics['miss_rate']:.4f}")
-            print(f"  Смещение центра: {seq_metrics['avg_center_shift']:.2f} ± {seq_metrics['std_center_shift']:.2f} px")
-            print(f"  Уверенность: {seq_metrics['avg_confidence']*100:.2f}% ± {seq_metrics['std_confidence']*100:.2f}%")
+        metrics = compute_metrics(results)
+        print(f"\n{seq_id}:")
+        print(f"  IoU: {metrics['avg_iou']:.4f} ± {metrics['std_iou']:.4f}")
+        print(f"  Пропуски: {metrics['miss_rate']:.4f}")
+        print(f"  Смещение центра: {metrics['avg_center_shift']:.2f} ± {metrics['std_center_shift']:.2f} px")
+        print(f"  Уверенность: {metrics['avg_confidence']*100:.2f}% ± {metrics['std_confidence']*100:.2f}%")
+
+
+def main():
+    """Основная функция для запуска детектора"""
+    args = parse_args()
+    
+    # Находим последовательности
+    sequences = find_sequence_ids(args.seq_dir)
+    
+    # Фильтруем последовательности, оставляем только те, для которых есть ground truth
+    valid_sequences = []
+    for seq in sequences:
+        # Оставляем только последовательности seq_0, seq_1, seq_2
+        if seq in ["seq_0", "seq_1", "seq_2"]:
+            valid_sequences.append(seq)
+    
+    if not valid_sequences:
+        print(f"Ошибка: Не найдены поддерживаемые последовательности в {args.seq_dir}")
+        return
+        
+    print(f"Найдены последовательности: {valid_sequences}")
+    
+    # Грузим модель в зависимости от типа
+    print(f"Загрузка модели типа '{args.model_type}' из {args.weights}...")
+    model = None
+    
+    if args.model_type == "base":
+        model = load_yolo_model(args.weights, device=args.device)
+    elif args.model_type == "aa":
+        model = load_aa_yolo_model(args.weights, device=args.device)
+    elif args.model_type == "tips":
+        model = load_tips_yolo_model(args.weights, device=args.device)
+    else:
+        print(f"Неизвестный тип модели: {args.model_type}")
+        return
+    
+    if model is None:
+        print(f"Не удалось загрузить модель из {args.weights}")
+        return
+    
+    # Запускаем на всех последовательностях
+    print(f"Запуск {args.model_type.upper()}-YOLO на последовательностях из {args.seq_dir}...")
+    
+    # Загружаем ground truth один раз
+    gt_data = None
+    if args.compute_metrics:
+        gt_path = os.path.join(args.seq_dir, "gt.jsonl")
+        gt_data = load_ground_truth(gt_path)
+    
+    # Обрабатываем каждую последовательность
+    for seq_id in tqdm(valid_sequences, desc="Обработка последовательностей"):
+        process_sequence(
+            model, 
+            args.seq_dir, 
+            seq_id, 
+            args.out_dir, 
+            args.prefix, 
+            compute_metrics=args.compute_metrics,
+            gt_data=gt_data,
+            conf_threshold=args.conf
+        )
 
 
 if __name__ == "__main__":

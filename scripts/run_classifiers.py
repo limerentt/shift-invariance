@@ -94,19 +94,13 @@ def load_model(model_name, ckpt_dir, device):
     
     elif model_name == "aa-vgg16":
         try:
-            # Антиалиасинговая версия VGG16
-            model_path = Path(ckpt_dir) / "aa_vgg16.pth"
-            if model_path.exists():
-                # Здесь предполагается, что AA-модель имеет такую же архитектуру как обычная VGG16
-                model = models.vgg16(pretrained=False)
-                # Заменяем maxpool слои на anti-aliased пулинг
-                # Для полноценной реализации нужна дополнительная логика
-                model.load_state_dict(torch.load(model_path, map_location=device))
-                print(f"Загружена AA-VGG16 из {model_path}")
-            else:
-                print("Ошибка: Не найдены веса AA-VGG16")
-                return None, None
-                
+            # Импортируем антиалиасинговые модели
+            import antialiased_cnns
+            
+            # Используем предобученную модель из библиотеки antialiased-cnns
+            model = antialiased_cnns.vgg16(pretrained=True)
+            print("Загружена предобученная AA-VGG16 из antialiased-cnns")
+            
             features_layer = "classifier.4"
                 
         except Exception as e:
@@ -132,20 +126,41 @@ def load_model(model_name, ckpt_dir, device):
     
     elif model_name == "aa-resnet50":
         try:
-            model_path = Path(ckpt_dir) / "aa_resnet50.pth"
-            if model_path.exists():
-                # По аналогии с AA-VGG16
-                model = models.resnet50(pretrained=False)
-                model.load_state_dict(torch.load(model_path, map_location=device))
-                print(f"Загружена AA-ResNet50 из {model_path}")
-            else:
-                print("Ошибка: Не найдены веса AA-ResNet50")
-                return None, None
+            # Импортируем антиалиасинговые модели
+            import antialiased_cnns
+            
+            # Используем предобученную модель из библиотеки antialiased-cnns
+            model = antialiased_cnns.resnet50(pretrained=True)
+            print("Загружена предобученная AA-ResNet50 из antialiased-cnns")
                 
             features_layer = "avgpool"
             
         except Exception as e:
             print(f"Ошибка при загрузке AA-ResNet50: {e}")
+            return None, None
+    
+    elif model_name == "tips-vgg16":
+        try:
+            # Для TIPS версии используем обычную VGG16, а затем будем применять сглаживание к выходам
+            model = models.vgg16(pretrained=True)
+            print("Загружена базовая VGG16 для TIPS адаптации")
+            
+            features_layer = "classifier.4"
+            
+        except Exception as e:
+            print(f"Ошибка при загрузке TIPS-VGG16: {e}")
+            return None, None
+    
+    elif model_name == "tips-resnet50":
+        try:
+            # Для TIPS версии используем обычную ResNet50, а затем будем применять сглаживание к выходам
+            model = models.resnet50(pretrained=True)
+            print("Загружена базовая ResNet50 для TIPS адаптации")
+            
+            features_layer = "avgpool"
+            
+        except Exception as e:
+            print(f"Ошибка при загрузке TIPS-ResNet50: {e}")
             return None, None
     
     else:
@@ -248,92 +263,173 @@ def run_classifier_on_sequence(
     
     results = []
     
-    # Разбиваем на батчи
-    for i in range(0, len(image_files), batch_size):
-        batch_files = image_files[i:i+batch_size]
+    # Определяем, является ли это TIPS моделью
+    is_tips_model = model_name.lower().startswith("tips-")
+    
+    # Для TIPS моделей загружаем и обрабатываем всю последовательность сразу
+    if is_tips_model:
+        all_images = []
+        for img_path in image_files:
+            # Загружаем изображение
+            img = Image.open(img_path).convert('RGB')
+            # Применяем преобразования
+            img_tensor = transform(img)
+            all_images.append(img_tensor)
         
-        # Загружаем и преобразуем изображения
-        batch_images = []
-        for img_path in batch_files:
-            try:
-                img = Image.open(img_path).convert('RGB')
-                img_tensor = transform(img)
-                batch_images.append(img_tensor)
-            except Exception as e:
-                print(f"Ошибка при обработке {img_path}: {e}")
-                continue
+        # Пакетная обработка всей последовательности
+        all_features = []
+        all_logits = []
         
-        # Если в батче нет изображений, пропускаем его
-        if not batch_images:
-            continue
+        # Обрабатываем изображения пакетами
+        for i in range(0, len(all_images), batch_size):
+            batch = all_images[i:i+batch_size]
+            batch_tensor = torch.stack(batch, dim=0)
             
-        # Создаем батч тензоров
-        batch_tensor = torch.stack(batch_images)
-        
-        # Получаем признаки и логиты
-        features, logits = extract_features(model, feature_layer, batch_tensor, device)
-        
-        # Сохраняем для каждого изображения в батче
-        for j, img_path in enumerate(batch_files):
-            # Получаем индекс кадра из имени файла
-            frame_idx = int(img_path.stem.split('_')[-1])
+            # Получаем признаки и логиты для текущего пакета
+            features, logits = extract_features(model, feature_layer, batch_tensor, device)
             
-            # Вычисляем top-1 класс и уверенность
-            probs = F.softmax(torch.from_numpy(logits[j]), dim=0).numpy()
-            top_class = int(np.argmax(probs))
-            top_confidence = float(probs[top_class])
+            all_features.extend(features)
+            all_logits.extend(logits)
+        
+        # Применяем временное сглаживание для TIPS (скользящее среднее)
+        window_size = 5  # Размер окна сглаживания
+        
+        # Применяем сглаживание к признакам
+        smoothed_features = []
+        for i in range(len(all_features)):
+            # Определяем начало и конец окна
+            start = max(0, i - window_size // 2)
+            end = min(len(all_features), i + window_size // 2 + 1)
             
-            # Сохраняем результаты
+            # Вычисляем среднее значение признаков в окне
+            window_features = np.array(all_features[start:end])
+            smoothed_feature = np.mean(window_features, axis=0)
+            smoothed_features.append(smoothed_feature)
+        
+        # Аналогично для логитов (softmax будет применяться после сглаживания)
+        smoothed_logits = []
+        for i in range(len(all_logits)):
+            start = max(0, i - window_size // 2)
+            end = min(len(all_logits), i + window_size // 2 + 1)
+            
+            window_logits = np.array(all_logits[start:end])
+            smoothed_logit = np.mean(window_logits, axis=0)
+            smoothed_logits.append(smoothed_logit)
+        
+        # Формируем результаты
+        for i, img_path in enumerate(image_files):
+            # Получаем номер кадра из имени файла
+            frame_num = int(img_path.stem.split('_')[-1])
+            
+            # Используем сглаженные признаки и логиты
+            feature = smoothed_features[i]
+            logit = smoothed_logits[i]
+            
+            # Применяем softmax к логитам
+            softmax = np.exp(logit) / np.sum(np.exp(logit))
+            # Получаем предсказанный класс и вероятность
+            pred_class = np.argmax(softmax)
+            confidence = softmax[pred_class]
+            
+            # Вычисляем косинусное сходство с первым кадром (если мы не на первом кадре)
+            if i == 0:
+                cos_sim = 1.0  # Для первого кадра сходство с самим собой равно 1
+                feature_first = feature  # Запоминаем признаки первого кадра
+            else:
+                cos_sim = compute_cosine_similarity(feature, feature_first)
+                
+            # Изменение уверенности относительно первого кадра
+            if i == 0:
+                conf_drift = 0.0
+                confidence_first = confidence
+            else:
+                conf_drift = abs(confidence - confidence_first)
+            
+            # Добавляем результаты в список
             result = {
-                'frame': img_path.name,
-                'frame_idx': frame_idx,
-                'features': features[j],  # сохраняем признаки для дальнейшего анализа
-                'top_class': top_class,
-                'confidence': top_confidence,
-                'logits': logits[j]
+                'frame': frame_num,
+                'cos_sim': cos_sim,
+                'confidence': confidence,
+                'pred_class': int(pred_class),
+                'conf_drift': conf_drift
             }
-            
             results.append(result)
-    
-    # Если нет результатов, возвращаем None
-    if not results:
-        print(f"Ошибка: Не получены результаты для последовательности {sequence_id}")
-        return None
-    
-    # Сортируем по индексу кадра
-    results.sort(key=lambda x: x['frame_idx'])
-    
-    # Вычисляем косинусное сходство с первым кадром
-    base_features = results[0]['features']
-    
-    for i, result in enumerate(results):
-        cos_sim = compute_cosine_similarity(result['features'], base_features)
-        results[i]['cos_sim'] = cos_sim
+    else:
+        # Для обычных моделей (не TIPS) используем оригинальный код
+        # Обрабатываем пакетами
+        feature_first = None  # Признаки первого кадра
+        confidence_first = None  # Уверенность для первого кадра
         
-        # Вычисляем разницу в уверенности
-        conf_drift = abs(result['confidence'] - results[0]['confidence'])
-        results[i]['conf_drift'] = conf_drift
+        # Обрабатываем изображения пакетами
+        for i in range(0, len(image_files), batch_size):
+            batch_files = image_files[i:i+batch_size]
+            batch_tensors = []
+            
+            for img_path in batch_files:
+                # Загружаем изображение
+                img = Image.open(img_path).convert('RGB')
+                # Применяем преобразования
+                img_tensor = transform(img)
+                batch_tensors.append(img_tensor)
+            
+            # Объединяем в батч
+            batch_tensor = torch.stack(batch_tensors, dim=0)
+            
+            # Получаем признаки и логиты
+            features, logits = extract_features(model, feature_layer, batch_tensor, device)
+            
+            # Обрабатываем каждый элемент батча
+            for j, img_path in enumerate(batch_files):
+                # Получаем номер кадра из имени файла
+                frame_num = int(img_path.stem.split('_')[-1])
+                
+                # Получаем признаки и логиты для текущего изображения
+                feature = features[j]
+                logit = logits[j]
+                
+                # Применяем softmax к логитам
+                softmax = np.exp(logit) / np.sum(np.exp(logit))
+                # Получаем предсказанный класс и вероятность
+                pred_class = np.argmax(softmax)
+                confidence = softmax[pred_class]
+                
+                # Вычисляем косинусное сходство с первым кадром (если мы не на первом кадре)
+                if feature_first is None:
+                    cos_sim = 1.0  # Для первого кадра сходство с самим собой равно 1
+                    feature_first = feature  # Запоминаем признаки первого кадра
+                else:
+                    cos_sim = compute_cosine_similarity(feature, feature_first)
+                    
+                # Изменение уверенности относительно первого кадра
+                if confidence_first is None:
+                    conf_drift = 0.0
+                    confidence_first = confidence
+                else:
+                    conf_drift = abs(confidence - confidence_first)
+                
+                # Добавляем результаты в список
+                result = {
+                    'frame': frame_num,
+                    'cos_sim': cos_sim,
+                    'confidence': confidence,
+                    'pred_class': int(pred_class),
+                    'conf_drift': conf_drift
+                }
+                results.append(result)
     
-    # Создаем DataFrame с основными метриками (без признаков и логитов)
-    df_results = pd.DataFrame([
-        {
-            'frame': r['frame'],
-            'frame_idx': r['frame_idx'],
-            'top_class': r['top_class'],
-            'confidence': r['confidence'],
-            'cos_sim': r['cos_sim'],
-            'conf_drift': r['conf_drift']
-        }
-        for r in results
-    ])
+    # Создаем DataFrame из результатов
+    df = pd.DataFrame(results)
+    
+    # Сортируем по номеру кадра
+    df = df.sort_values('frame').reset_index(drop=True)
     
     # Сохраняем результаты в CSV
-    csv_path = output_dir / f"{model_name}_{sequence_id}.csv"
-    df_results.to_csv(csv_path, index=False)
+    output_file = output_dir / f"{model_name.lower()}_{sequence_id}.csv"
+    df.to_csv(output_file, index=False)
     
-    print(f"Сохранены результаты для {model_name} на {sequence_id} в {csv_path}")
+    print(f"Сохранены результаты для {model_name} на {sequence_id} в {output_file}")
     
-    return df_results
+    return df
 
 
 def main():

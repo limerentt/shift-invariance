@@ -433,13 +433,60 @@ def load_ground_truth(gt_path):
     """
     gt_data = {}
     try:
+        print(f"Загрузка ground truth данных из {gt_path}...")
         with open(gt_path, 'r') as f:
             for line in f:
                 data = json.loads(line)
-                gt_data[data['img']] = {
-                    'bbox': data['bbox'],
-                    'class': data['class']
-                }
+                # Поддержка разных форматов JSONL
+                img_id = data.get('image_id', data.get('img', ''))
+                bbox = data.get('bbox', [0, 0, 0, 0])
+                class_id = data.get('category_id', data.get('class', 1))
+                
+                # Получаем компоненты имени
+                parts = img_id.split('_')
+                if len(parts) >= 3:
+                    # Для последовательностей типа seq_0_XX
+                    seq_name = parts[0]
+                    seq_num = parts[1]
+                    frame_num = int(parts[2])
+                    
+                    # Создаем сопоставление для всех возможных вариантов
+                    # 1. seq_0_00.png (с двумя цифрами)
+                    img_filename_2digits = f"{seq_name}_{seq_num}_{frame_num:02d}.png"
+                    # 2. seq_0_000.png (с тремя цифрами)
+                    img_filename_3digits = f"{seq_name}_{seq_num}_{frame_num:03d}.png"
+                    # 3. Оригинальное имя (seq_0_00) плюс .png
+                    img_filename_original = f"{img_id}.png"
+                    # 4. Только оригинальное имя без .png (для некоторых случаев)
+                    img_filename_no_ext = img_id
+                    
+                    # Сохраняем данные для всех вариантов имен файлов
+                    for filename in [img_filename_2digits, img_filename_3digits, 
+                                     img_filename_original, img_filename_no_ext]:
+                        gt_data[filename] = {
+                            'bbox': bbox,
+                            'class': str(class_id)
+                        }
+                else:
+                    # Если формат другой, используем стандартное преобразование
+                    img_filename = img_id
+                    if not img_id.endswith('.png') and not img_id.endswith('.jpg'):
+                        img_filename = f"{img_id}.png"
+                    
+                    gt_data[img_filename] = {
+                        'bbox': bbox,
+                        'class': str(class_id)
+                    }
+                    gt_data[img_id] = {
+                        'bbox': bbox,
+                        'class': str(class_id)
+                    }
+        
+        if not gt_data:
+            print("Предупреждение: Ground truth данные загружены, но словарь пуст")
+        else:
+            print(f"Загружено {len(gt_data)/4} объектов ground truth") # Делим на 4, так как для каждого объекта у нас 4 варианта ключей
+        
         return gt_data
     except Exception as e:
         print(f"Ошибка при загрузке ground truth данных: {e}")
@@ -534,156 +581,202 @@ def find_sequence_ids(seq_dir):
 
 def generate_tips_results(baseline_csv, output_csv, window_size=5, confidence_boost=0.02):
     """
-    Генерирует симулированные TIPS результаты на основе baseline результатов YOLO
-    путем сглаживания bounding boxes и повышения уверенности.
+    ОПАСНО: ЭТА ФУНКЦИЯ БОЛЬШЕ НЕ ИСПОЛЬЗУЕТСЯ.
+    Эта функция искусственно модифицировала результаты детекции, что недопустимо.
+    Вместо этого используйте run_tips_yolo для честной реализации TIPS.
+    
+    Для корректной реализации TIPS необходимо:
+    1. Применить небольшие сдвиги к входному изображению при инференсе
+    2. Выполнить предсказания для каждой смещенной версии
+    3. Выровнять координаты обратно в исходное пространство
+    4. Агрегировать результаты через NMS или усреднение
+    
+    См. функцию run_tips_yolo, которая реализует этот подход корректно.
+    """
+    print("ПРЕДУПРЕЖДЕНИЕ: Функция generate_tips_results больше не используется!")
+    print("Используйте run_tips_yolo для честной реализации TIPS")
+    return None
+
+
+def run_tips_yolo(model, image_path, shifts=[(0,0), (1,0), (0,1), (-1,0), (0,-1)], conf_threshold=0.25):
+    """
+    Применяет TIPS (Test-time Image-based Processing for Shift-invariance) к модели YOLO.
+    TIPS выполняет предсказания на нескольких слегка смещенных версиях изображения
+    и объединяет результаты для повышения стабильности.
     
     Args:
-        baseline_csv: путь к CSV файлу с результатами baseline модели
-        output_csv: путь для сохранения симулированных TIPS результатов
-        window_size: размер окна для скользящего среднего
-        confidence_boost: небольшое увеличение уверенности для TIPS (в долях от 1)
+        model: предварительно загруженная модель YOLO
+        image_path: путь к изображению для детекции
+        shifts: список сдвигов (dx, dy) для применения к изображению 
+                по умолчанию: [(0,0), (1,0), (0,1), (-1,0), (0,-1)]
+        conf_threshold: порог уверенности для фильтрации детекций
         
     Returns:
-        pd.DataFrame: DataFrame с симулированными TIPS результатами
+        dict: агрегированные результаты детекции
     """
-    # Загружаем baseline результаты
-    baseline_df = load_csv_results(baseline_csv)
-    if baseline_df is None:
-        print(f"Ошибка: Не удалось загрузить baseline результаты из {baseline_csv}")
+    import cv2
+    import numpy as np
+    from torchvision.ops import nms
+    import torch
+    
+    # Загружаем изображение
+    original_image = cv2.imread(str(image_path))
+    if original_image is None:
+        print(f"Не удалось загрузить изображение {image_path}")
         return None
     
-    # Определим тип последовательности (seq_0, seq_1 или seq_2)
-    sequence_type = None
-    if "seq_1" in str(baseline_csv):
-        sequence_type = "seq_1"
-    elif "seq_0" in str(baseline_csv):
-        sequence_type = "seq_0"
-    elif "seq_2" in str(baseline_csv):
-        sequence_type = "seq_2"
+    height, width = original_image.shape[:2]
     
-    # Копируем baseline данные
-    tips_df = baseline_df.copy()
+    # Подготавливаем структуры для сбора всех результатов
+    all_boxes = []
+    all_scores = []
+    all_class_ids = []
     
-    # Извлекаем координаты bbox и confidence
-    bbox_list = [parse_bbox_string(bbox) for bbox in baseline_df['pred_bbox']]
-    x_coords = [bbox[0] for bbox in bbox_list]
-    y_coords = [bbox[1] for bbox in bbox_list]
-    widths = [bbox[2] for bbox in bbox_list]
-    heights = [bbox[3] for bbox in bbox_list]
-    confidences = baseline_df['confidence'].values
-    gt_bbox_list = [parse_bbox_string(bbox) for bbox in baseline_df['gt_bbox']]
-    
-    # Применяем скользящее среднее для сглаживания
-    def apply_smoothing(values, window):
-        # Используем pd.Series для удобства применения скользящего среднего
-        series = pd.Series(values)
-        # Применяем скользящее среднее с заданным окном
-        smoothed = series.rolling(window=window, center=True, min_periods=1).mean()
-        # Заполняем NaN значения исходными данными
-        smoothed = smoothed.fillna(series)
-        return smoothed.values
-    
-    # Для последовательности seq_1 используем специальную обработку
-    if sequence_type == "seq_1":
-        # Просто немного увеличиваем confidence, но не меняем bbox
-        tips_conf = np.minimum(confidences + confidence_boost, np.ones_like(confidences))
-        tips_df['confidence'] = tips_conf
+    # Применяем каждый сдвиг и выполняем детекцию
+    for dx, dy in shifts:
+        # Создаем матрицу преобразования для сдвига
+        M = np.float32([[1, 0, dx], [0, 1, dy]])
+        shifted_image = cv2.warpAffine(original_image, M, (width, height), 
+                                       borderMode=cv2.BORDER_REPLICATE)
         
-        # Пересчитываем IoU и center_shift (хотя они не изменятся)
-        tips_df['iou'] = baseline_df['iou']
-        tips_df['center_shift'] = baseline_df['center_shift']
-    else:
-        # Для seq_0 и seq_2 используем мягкое сглаживание, чтобы не ухудшать IoU
+        # Запускаем модель на сдвинутом изображении
+        results = model(shifted_image, verbose=False)
         
-        # Улучшаем только результаты с низкой уверенностью или пропусками
-        # Идентифицируем пропуски (нулевые боксы) и проблемные детекции
-        problematic_indices = []
-        for i, bbox in enumerate(bbox_list):
-            # Нулевые боксы (пропуски) или детекции с низкой уверенностью
-            if bbox == [0, 0, 0, 0] or confidences[i] < 0.4:
-                problematic_indices.append(i)
-                
-        # Пытаемся улучшить проблемные индексы
-        if problematic_indices:
-            for i in problematic_indices:
-                # Находим ближайшие хорошие детекции
-                good_indices = [j for j in range(len(bbox_list)) 
-                              if j != i and bbox_list[j] != [0, 0, 0, 0] and confidences[j] >= 0.4]
-                
-                if good_indices:
-                    # Находим ближайший индекс
-                    closest_idx = min(good_indices, key=lambda j: abs(j - i))
-                    
-                    # Используем ближайшую хорошую детекцию
-                    if bbox_list[i] == [0, 0, 0, 0]:  # Если был пропуск
-                        # Используем для пропущенной детекции ближайшую хорошую детекцию,
-                        # но с небольшой коррекцией в сторону GT bbox
-                        good_bbox = bbox_list[closest_idx]
-                        gt_bbox = gt_bbox_list[i]
-                        
-                        # Линейная интерполяция между хорошей детекцией и GT (склоняемся к хорошей детекции)
-                        alpha = 0.7  # Вес хорошей детекции (1.0 = полностью хорошая, 0.0 = полностью GT)
-                        new_x = good_bbox[0] * alpha + gt_bbox[0] * (1 - alpha)
-                        new_y = good_bbox[1] * alpha + gt_bbox[1] * (1 - alpha)
-                        new_w = good_bbox[2] * alpha + gt_bbox[2] * (1 - alpha)
-                        new_h = good_bbox[3] * alpha + gt_bbox[3] * (1 - alpha)
-                        
-                        bbox_list[i] = [new_x, new_y, new_w, new_h]
-                        # Также улучшаем уверенность, но держим ее ниже, чем для хороших детекций
-                        confidences[i] = confidences[closest_idx] * 0.8
-        
-        # Сглаживаем координаты с использованием скользящего среднего
-        smoothed_x = apply_smoothing(x_coords, window_size)
-        smoothed_y = apply_smoothing(y_coords, window_size)
-        smoothed_w = apply_smoothing(widths, window_size)
-        smoothed_h = apply_smoothing(heights, window_size)
-        smoothed_conf = apply_smoothing(confidences, window_size)
-        
-        # Комбинируем исходные значения со сглаженными для лучшего сохранения IoU
-        alpha = 0.3  # Вес сглаженных значений (только слегка сглаживаем)
-        for i in range(len(x_coords)):
-            if bbox_list[i] != [0, 0, 0, 0]:  # Для ненулевых боксов
-                x_coords[i] = x_coords[i] * (1 - alpha) + smoothed_x[i] * alpha
-                y_coords[i] = y_coords[i] * (1 - alpha) + smoothed_y[i] * alpha
-                widths[i] = widths[i] * (1 - alpha) + smoothed_w[i] * alpha
-                heights[i] = heights[i] * (1 - alpha) + smoothed_h[i] * alpha
-                confidences[i] = min(confidences[i] + confidence_boost, 1.0)
-        
-        # Формируем новые bbox и обновляем DataFrame
-        new_bbox_list = []
-        for i in range(len(x_coords)):
-            if bbox_list[i] == [0, 0, 0, 0]:
-                new_bbox_list.append([0, 0, 0, 0])
-            else:
-                new_bbox = [x_coords[i], y_coords[i], widths[i], heights[i]]
-                new_bbox_list.append(new_bbox)
-        
-        # Обновляем значения в DataFrame
-        tips_df['pred_bbox'] = new_bbox_list
-        tips_df['confidence'] = confidences
-        
-        # Пересчитываем IoU и center_shift для новых bbox
-        new_iou_list = []
-        new_center_shift_list = []
-        
-        for i in range(len(new_bbox_list)):
-            pred_bbox = new_bbox_list[i]
-            gt_bbox = gt_bbox_list[i]
+        for result in results:
+            boxes = result.boxes
             
-            new_iou = calculate_iou(pred_bbox, gt_bbox)
-            new_center_shift = calculate_center_shift(pred_bbox, gt_bbox)
-            
-            new_iou_list.append(new_iou)
-            new_center_shift_list.append(new_center_shift)
-        
-        tips_df['iou'] = new_iou_list
-        tips_df['center_shift'] = new_center_shift_list
+            for i in range(len(boxes)):
+                cls_id = int(boxes.cls[i].item())
+                confidence = boxes.conf[i].item()
+                
+                # Фильтруем по порогу уверенности
+                if confidence < conf_threshold:
+                    continue
+                
+                # Получаем координаты в формате [x1, y1, x2, y2]
+                xyxy = boxes.xyxy[i].cpu().numpy()
+                
+                # Компенсируем изначальный сдвиг, чтобы вернуться в оригинальное пространство координат
+                xyxy[0] -= dx
+                xyxy[2] -= dx
+                xyxy[1] -= dy
+                xyxy[3] -= dy
+                
+                # Проверяем, что бокс не вышел за границы изображения
+                xyxy[0] = max(0, xyxy[0])
+                xyxy[1] = max(0, xyxy[1])
+                xyxy[2] = min(width, xyxy[2])
+                xyxy[3] = min(height, xyxy[3])
+                
+                # Собираем все детекции
+                all_boxes.append(xyxy)
+                all_scores.append(confidence)
+                all_class_ids.append(cls_id)
     
-    # Сохраняем результаты
+    # Если детекций нет
+    if not all_boxes:
+        return None
+    
+    # Конвертируем в тензоры для NMS
+    boxes = torch.tensor(all_boxes, dtype=torch.float32)
+    scores = torch.tensor(all_scores, dtype=torch.float32)
+    class_ids = torch.tensor(all_class_ids, dtype=torch.int64)
+    
+    # Агрегируем результаты, используя NMS
+    # Сначала группируем по классам
+    unique_classes = class_ids.unique()
+    final_boxes = []
+    final_scores = []
+    final_class_ids = []
+    
+    for cls in unique_classes:
+        # Фильтруем детекции для текущего класса
+        indices = (class_ids == cls).nonzero(as_tuple=True)[0]
+        cls_boxes = boxes[indices]
+        cls_scores = scores[indices]
+        
+        # Применяем NMS
+        keep_indices = nms(cls_boxes, cls_scores, iou_threshold=0.45)
+        
+        # Добавляем сохраненные детекции
+        final_boxes.extend(cls_boxes[keep_indices].tolist())
+        final_scores.extend(cls_scores[keep_indices].tolist())
+        final_class_ids.extend([cls.item()] * len(keep_indices))
+    
+    # Конвертируем в формат [x, y, w, h]
+    final_xywh_boxes = []
+    for box in final_boxes:
+        x1, y1, x2, y2 = box
+        w = x2 - x1
+        h = y2 - y1
+        final_xywh_boxes.append([x1, y1, w, h])
+    
+    # Создаем объект-имитацию результатов модели YOLO для совместимости с остальным кодом
+    class TIPSDetectionResult:
+        def __init__(self, boxes, scores, class_ids, class_names):
+            self.boxes = boxes
+            self.scores = scores
+            self.class_ids = class_ids
+            self.class_names = class_names
+    
+    class TIPSBoxes:
+        def __init__(self, xywh, xyxy, conf, cls, class_names):
+            self.xywh = xywh
+            self.xyxy = xyxy
+            self.conf = conf
+            self.cls = cls
+            self.names = class_names
+    
+    # Создаем тензоры для боксов
+    xywh = torch.tensor(final_xywh_boxes, dtype=torch.float32)
+    xyxy = torch.tensor(final_boxes, dtype=torch.float32)
+    conf = torch.tensor(final_scores, dtype=torch.float32)
+    cls = torch.tensor(final_class_ids, dtype=torch.int64)
+    
+    # Формируем результат
+    boxes = TIPSBoxes(
+        xywh=xywh, 
+        xyxy=xyxy, 
+        conf=conf, 
+        cls=cls, 
+        class_names=model.names
+    )
+    
+    result = TIPSDetectionResult(
+        boxes=boxes,
+        scores=final_scores,
+        class_ids=final_class_ids,
+        class_names=model.names
+    )
+    
+    return [result]
+
+
+def load_tips_yolo_model(weights_path, device='cpu'):
+    """
+    Загружает модель YOLO и оборачивает ее функцией TIPS для инференса.
+    
+    Args:
+        weights_path: путь к весам модели YOLO
+        device: устройство для выполнения (cpu, cuda, mps)
+        
+    Returns:
+        callable: функция для запуска модели с TIPS
+    """
+    from ultralytics import YOLO
+    
     try:
-        tips_df.to_csv(output_csv, index=False)
-        print(f"Симулированные TIPS результаты сохранены в {output_csv}")
-        return tips_df
+        # Загружаем базовую модель
+        base_model = YOLO(weights_path)
+        
+        # Создаем обертку, которая использует TIPS при инференсе
+        def tips_model(img, **kwargs):
+            return run_tips_yolo(base_model, img, **kwargs)
+        
+        # Копируем некоторые нужные атрибуты из оригинальной модели
+        tips_model.names = base_model.names
+        
+        return tips_model
     except Exception as e:
-        print(f"Ошибка при сохранении TIPS результатов: {e}")
-        return tips_df 
+        print(f"Ошибка при загрузке TIPS-YOLO модели: {e}")
+        return None 
