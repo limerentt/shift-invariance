@@ -275,12 +275,84 @@ def generate_model_performance_radar(class_data, detect_data, output_dir="../fig
     # Define metrics for the radar chart
     metrics = ['Cos Sim', 'Conf Stability', 'IoU', 'Center Stability', 'Miss Rate']
     
-    # Calculate aggregated metrics for each model type
-    model_metrics = {
-        "Baseline": [0.81, 0.7, 0.68, 0.5, 0.2],
-        "Anti-Aliased": [0.93, 0.85, 0.88, 0.8, 0.02],
-        "TIPS": [0.97, 0.95, 0.99, 0.98, 0.0]
+    # Calculate aggregated metrics from actual data
+    model_metrics = {}
+    
+    # Map classification models to their categories
+    model_categories = {
+        "VGG16": "Baseline",
+        "ResNet50": "Baseline",
+        "AA-VGG16": "Anti-Aliased",
+        "AA-ResNet50": "Anti-Aliased",
+        "TIPS-VGG16": "TIPS",
+        "TIPS-ResNet50": "TIPS"
     }
+    
+    # Initialize accumulators for each category
+    cos_sim_values = {"Baseline": [], "Anti-Aliased": [], "TIPS": []}
+    conf_drift_values = {"Baseline": [], "Anti-Aliased": [], "TIPS": []}
+    
+    # Calculate cosine similarity and confidence stability from classification data
+    for model_name, model_data in class_data.items():
+        if model_name in model_categories:
+            category = model_categories[model_name]
+            for seq_name, seq_data in model_data.items():
+                cos_sim_values[category].extend(seq_data['cos_sim'].values)
+                conf_drift_values[category].extend(seq_data['conf_drift'].values)
+    
+    # Map detection models to their categories
+    detect_categories = {
+        "baseline": "Baseline",
+        "yolo": "Anti-Aliased",
+        "tips": "TIPS"
+    }
+    
+    # Initialize accumulators for detection metrics
+    iou_values = {"Baseline": [], "Anti-Aliased": [], "TIPS": []}
+    center_shift_values = {"Baseline": [], "Anti-Aliased": [], "TIPS": []}
+    miss_values = {"Baseline": [], "Anti-Aliased": [], "TIPS": []}
+    
+    # Calculate detection metrics from detection data
+    for model_name, model_data in detect_data.items():
+        if model_name in detect_categories:
+            category = detect_categories[model_name]
+            for seq_name, seq_data in model_data.items():
+                iou_values[category].extend(seq_data['iou'].values)
+                center_shift_values[category].extend(seq_data['center_shift'].values)
+                
+                # Calculate miss rate (assuming confidence threshold of 0.5)
+                if 'confidence' in seq_data.columns:
+                    miss_count = (seq_data['confidence'] < 0.5).sum()
+                    miss_rate = miss_count / len(seq_data)
+                    miss_values[category].append(miss_rate)
+    
+    # Calculate final metrics for each category
+    for category in ["Baseline", "Anti-Aliased", "TIPS"]:
+        cos_sim = np.mean(cos_sim_values[category]) if cos_sim_values[category] else 0.0
+        
+        # Convert confidence drift to stability (1 - normalized_drift)
+        mean_drift = np.mean(conf_drift_values[category]) if conf_drift_values[category] else 0.0
+        max_drift = 0.2  # Normalizing factor based on observed maximum drift
+        conf_stability = 1.0 - min(mean_drift / max_drift, 1.0)
+        
+        iou = np.mean(iou_values[category]) if iou_values[category] else 0.0
+        
+        # Convert center shift to stability (1 - normalized_shift)
+        mean_shift = np.mean(center_shift_values[category]) if center_shift_values[category] else 0.0
+        max_shift = 10.0  # Normalizing factor based on observed maximum shift
+        center_stability = 1.0 - min(mean_shift / max_shift, 1.0)
+        
+        miss_rate = np.mean(miss_values[category]) if miss_values[category] else 0.0
+        
+        model_metrics[category] = [cos_sim, conf_stability, iou, center_stability, miss_rate]
+        
+        # Print the calculated metrics for debugging
+        print(f"Calculated metrics for {category}:")
+        print(f"  Cos Sim: {cos_sim:.4f}")
+        print(f"  Conf Stability: {conf_stability:.4f}")
+        print(f"  IoU: {iou:.4f}")
+        print(f"  Center Stability: {center_stability:.4f}")
+        print(f"  Miss Rate: {miss_rate:.4f}")
     
     # Number of metrics
     N = len(metrics)

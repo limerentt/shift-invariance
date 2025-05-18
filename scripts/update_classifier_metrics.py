@@ -24,8 +24,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def update_csv_with_direct_confidence(csv_path, seq_dir):
     """
-    Обновляет CSV-файл, добавляя метрику confidence, полученную как случайные значения
-    для тестирования (не использует реальные модели)
+    Обновляет CSV-файл, добавляя метрику confidence, полученную из файлов 
+    с реальными значениями или вычисленную из существующих метрик 
     
     Args:
         csv_path: путь к CSV-файлу
@@ -48,7 +48,7 @@ def update_csv_with_direct_confidence(csv_path, seq_dir):
                                 for i in range(sample_rows))
                 
                 if is_derived:
-                    print(f"Столбец confidence был получен из conf_drift. Заменяем на тестовые значения...")
+                    print(f"Столбец confidence был получен из conf_drift. Заменяем на реальные значения...")
                 else:
                     print(f"Столбец confidence уже содержит прямые значения в {csv_path}, пропускаем...")
                     return True
@@ -56,29 +56,59 @@ def update_csv_with_direct_confidence(csv_path, seq_dir):
                 print(f"Столбец confidence уже существует в {csv_path}, пропускаем...")
                 return True
         
-        # Получаем название модели из имени файла
-        model_name = os.path.basename(csv_path).split('_')[0]
+        # Получаем название модели и последовательности из имени файла
+        filename = os.path.basename(csv_path)
+        parts = filename.split('_')
+        if len(parts) < 2:
+            print(f"Неверный формат имени файла: {filename}")
+            return False
         
-        # Получаем количество строк в CSV
-        num_rows = len(df)
+        model_name = parts[0]
+        sequence = "_".join(parts[1:]).replace('.csv', '')
         
-        # Генерируем случайные значения confidence в диапазоне 0.9-1.0
-        # Для тестирования используем случайные значения с небольшими колебаниями
-        # Базовую модель делаем менее стабильной (больше колебаний)
-        if "AA-" in model_name or "TIPS-" in model_name:
-            # Для AA и TIPS делаем более стабильные и высокие значения
-            confidence_values = np.random.uniform(0.95, 0.99, num_rows)
+        # Путь к файлу с реальными значениями confidence
+        real_conf_path = Path(seq_dir).parent / "results" / "real_confidence" / f"{model_name}_{sequence}.txt"
+        
+        if real_conf_path.exists():
+            # Загружаем реальные значения confidence
+            try:
+                real_conf = pd.read_csv(real_conf_path, header=None).values.flatten()
+                if len(real_conf) != len(df):
+                    print(f"Ошибка: несоответствие длин ({len(real_conf)} vs {len(df)}) в {real_conf_path}")
+                    # Используем альтернативный подход - вычисляем из других метрик
+                    if 'conf_drift' in df.columns:
+                        print(f"Вычисляем confidence из conf_drift для {csv_path}")
+                        df['confidence'] = 1.0 - df['conf_drift']
+                    else:
+                        print(f"Нет данных для вычисления confidence в {csv_path}")
+                        return False
+                else:
+                    # Используем реальные значения
+                    df['confidence'] = real_conf
+                    print(f"Добавлены реальные значения confidence из {real_conf_path}")
+            except Exception as e:
+                print(f"Ошибка при чтении реальных значений confidence: {e}")
+                # Используем альтернативный подход
+                if 'conf_drift' in df.columns:
+                    print(f"Вычисляем confidence из conf_drift для {csv_path}")
+                    df['confidence'] = 1.0 - df['conf_drift']
+                else:
+                    print(f"Нет данных для вычисления confidence в {csv_path}")
+                    return False
         else:
-            # Для базовых моделей делаем менее стабильные значения
-            confidence_values = np.random.uniform(0.88, 0.98, num_rows)
-        
-        # Добавляем столбец confidence с тестовыми значениями
-        df['confidence'] = confidence_values
+            # Если нет файла с реальными значениями, вычисляем из существующих метрик
+            if 'conf_drift' in df.columns:
+                print(f"Файл с реальными значениями не найден: {real_conf_path}")
+                print(f"Вычисляем confidence из conf_drift для {csv_path}")
+                df['confidence'] = 1.0 - df['conf_drift']
+            else:
+                print(f"Нет данных для вычисления confidence в {csv_path}")
+                return False
         
         # Сохраняем обновленный CSV-файл
         df.to_csv(csv_path, index=False)
         
-        print(f"CSV-файл успешно обновлен с тестовыми значениями confidence: {csv_path}")
+        print(f"CSV-файл успешно обновлен со значениями confidence: {csv_path}")
         return True
     
     except Exception as e:
