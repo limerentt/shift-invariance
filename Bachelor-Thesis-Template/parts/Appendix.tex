@@ -1,5 +1,353 @@
 \section*{Приложение}
 \addcontentsline{toc}{section}{Приложение}
-\label{sec:Apendix} \index{Apendix}
+\label{sec:Appendix} \index{Appendix}
 
-Здесь необходимо написать приложение, которое вы должны придумать самостоятельно.
+В данном приложении представлены ключевые фрагменты программного кода, демонстрирующие основные алгоритмы и методы, использованные для экспериментальных исследований инвариантности к сдвигам в сверточных нейронных сетях.
+
+\subsection*{A. Генерация данных с контролируемыми сдвигами}
+\label{appendix:data_generation}
+\addcontentsline{toc}{subsection}{A. Генерация данных с контролируемыми сдвигами}
+
+Основные функции для генерации тестовых последовательностей с контролируемыми сдвигами:
+
+\begin{lstlisting}[language=Python]
+import numpy as np
+import torch
+from PIL import Image
+
+def generate_shift_sequence(image, max_shift=8, step=1.0):
+    """
+    Генерация последовательности изображений с горизонтальными сдвигами.
+    
+    Args:
+        image: Исходное изображение
+        max_shift: Максимальная величина сдвига в пикселях
+        step: Шаг сдвига в пикселях
+            
+    Returns:
+        list: Список сдвинутых изображений
+    """
+    if not isinstance(image, Image.Image):
+        image = Image.fromarray(image)
+        
+    sequence = []
+    shifts = np.arange(0, max_shift + 0.1, step)
+    
+    for shift in shifts:
+        # Сдвиг изображения с помощью аффинных преобразований
+        shifted = image.transform(
+            image.size, 
+            Image.AFFINE, 
+            (1, 0, shift, 0, 1, 0), 
+            resample=Image.BILINEAR
+        )
+        sequence.append(shifted)
+            
+    return sequence
+\end{lstlisting}
+
+\subsection*{B. Реализация методов антиалиасинга}
+\label{appendix:antialiasing_code}
+\addcontentsline{toc}{subsection}{B. Реализация методов антиалиасинга}
+
+Ключевые классы для реализации методов BlurPool и TIPS:
+
+\begin{lstlisting}[language=Python]
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class BlurPool(nn.Module):
+    """Реализация метода BlurPool для уменьшения алиасинга"""
+    
+    def __init__(self, channels, kernel_size=3, stride=2):
+        super(BlurPool, self).__init__()
+        self.channels = channels
+        self.stride = stride
+        
+        # Создание биномиального фильтра
+        if kernel_size == 3:
+            blur_filter = torch.tensor([1., 2., 1.])
+        elif kernel_size == 5:
+            blur_filter = torch.tensor([1., 4., 6., 4., 1.])
+        else:
+            raise ValueError("kernel_size должен быть 3 или 5")
+            
+        # Нормализация фильтра
+        blur_filter = blur_filter / blur_filter.sum()
+        
+        # Создание 2D фильтра из 1D
+        blur_filter = blur_filter[:, None] * blur_filter[None, :]
+        
+        # Регистрация фильтра как буфера
+        self.register_buffer(
+            'blur_filter', 
+            blur_filter[None, None, :, :].repeat(channels, 1, 1, 1)
+        )
+        
+    def forward(self, x):
+        return F.conv2d(
+            F.pad(x, [1, 1, 1, 1], mode='reflect'),
+            self.blur_filter, 
+            groups=self.channels,
+            stride=self.stride
+        )
+
+
+class TIPSLayer(nn.Module):
+    """Реализация метода TIPS для обеспечения инвариантности"""
+    
+    def __init__(self, channels, stride=2):
+        super(TIPSLayer, self).__init__()
+        self.channels = channels
+        self.stride = stride
+        
+        # Создание обучаемых весов для каждой фазы
+        self.weight_generator = nn.Conv2d(
+            channels, stride*stride, kernel_size=1
+        )
+        
+    def forward(self, x):
+        batch_size, channels, height, width = x.shape
+        s = self.stride
+        
+        # Создание полифазных компонент
+        phases = []
+        for i in range(s):
+            for j in range(s):
+                phase = x[:, :, i::s, j::s]
+                phases.append(phase)
+        
+        # Получение весов для каждой фазы
+        weight_logits = self.weight_generator(
+            F.adaptive_avg_pool2d(x, 1)
+        )
+        phase_weights = F.softmax(weight_logits, dim=1)
+        
+        # Взвешенное суммирование
+        output = 0
+        for i, phase in enumerate(phases):
+            weight = phase_weights[:, i, :, :].view(batch_size, 1, 1, 1)
+            output = output + phase * weight
+            
+        return output
+\end{lstlisting}
+
+\subsection*{C. Модифицированные классификационные модели}
+\label{appendix:classifiers_code}
+\addcontentsline{toc}{subsection}{C. Модифицированные классификационные модели}
+
+Ключевые фрагменты кода для модификации классификационных моделей:
+
+\begin{lstlisting}[language=Python]
+import torch.nn as nn
+import torchvision.models as models
+
+def replace_max_pool_with_blur_pool(model, channels_dict):
+    """
+    Заменяет все MaxPool слои на BlurPool в модели.
+    
+    Args:
+        model: Модель для модификации
+        channels_dict: Словарь {имя_слоя: число_каналов}
+    """
+    for name, child in model.named_children():
+        if isinstance(child, nn.MaxPool2d):
+            channels = channels_dict[name]
+            # Заменяем MaxPool на MaxPool(stride=1) + BlurPool
+            setattr(
+                model, 
+                name, 
+                nn.Sequential(
+                    nn.MaxPool2d(
+                        kernel_size=child.kernel_size,
+                        stride=1,
+                        padding=child.padding
+                    ),
+                    BlurPool(channels=channels, stride=child.stride)
+                )
+            )
+        else:
+            replace_max_pool_with_blur_pool(child, channels_dict)
+
+
+def apply_tips_to_resnet(model):
+    """
+    Применяет TIPS ко всем слоям с шагом > 1 в ResNet.
+    
+    Args:
+        model: Модель ResNet для модификации
+    """
+    # Модификация первого слоя
+    if model.conv1.stride[0] > 1:
+        stride = model.conv1.stride[0]
+        channels = model.conv1.out_channels
+        
+        model.conv1 = nn.Sequential(
+            nn.Conv2d(
+                3, channels, kernel_size=7, 
+                stride=1, padding=3, bias=False
+            ),
+            TIPSLayer(channels, stride=stride)
+        )
+    
+    # Модификация maxpool слоя
+    if hasattr(model, 'maxpool') and model.maxpool.stride > 1:
+        model.maxpool = nn.Sequential(
+            nn.MaxPool2d(kernel_size=3, stride=1, padding=1),
+            TIPSLayer(64, stride=2)
+        )
+\end{lstlisting}
+
+\subsection*{D. Модифицированные архитектуры YOLOv5}
+\label{appendix:yolo_code}
+\addcontentsline{toc}{subsection}{D. Модифицированные архитектуры YOLOv5}
+
+Основные компоненты для модификации YOLOv5:
+
+\begin{lstlisting}[language=Python]
+import torch.nn as nn
+
+class ConvBlurPool(nn.Module):
+    """Свертка с последующим BlurPool для YOLOv5"""
+    
+    def __init__(self, in_channels, out_channels, kernel_size=3):
+        super(ConvBlurPool, self).__init__()
+        self.conv = nn.Conv2d(
+            in_channels, 
+            out_channels, 
+            kernel_size=kernel_size,
+            stride=1,  # Заменяем шаг на 1
+            padding=kernel_size // 2,
+            bias=False
+        )
+        self.blurpool = BlurPool(out_channels, stride=2)
+        
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.blurpool(x)
+        return x
+
+
+def modify_yolov5_backbone(model, anti_aliasing_method='blurpool'):
+    """
+    Модифицирует backbone YOLOv5 с применением методов антиалиасинга.
+    
+    Args:
+        model: Модель YOLOv5
+        anti_aliasing_method: 'blurpool' или 'tips'
+    """
+    # Функция для рекурсивного прохода по модулям
+    def _modify_module(module):
+        for name, child in module.named_children():
+            # Проверяем, является ли модуль сверткой с шагом 2
+            if isinstance(child, nn.Conv2d) and child.stride[0] == 2:
+                if anti_aliasing_method == 'blurpool':
+                    # Заменяем на свертку с BlurPool
+                    setattr(
+                        module, 
+                        name, 
+                        ConvBlurPool(
+                            child.in_channels,
+                            child.out_channels,
+                            child.kernel_size[0]
+                        )
+                    )
+                elif anti_aliasing_method == 'tips':
+                    # Заменяем на свертку с TIPS
+                    setattr(
+                        module, 
+                        name, 
+                        ConvTIPS(
+                            child.in_channels,
+                            child.out_channels,
+                            child.kernel_size[0]
+                        )
+                    )
+            else:
+                # Рекурсивно обрабатываем вложенные модули
+                _modify_module(child)
+    
+    # Модифицируем backbone
+    _modify_module(model.model.backbone)
+    
+    return model
+\end{lstlisting}
+
+\subsection*{E. Оценка инвариантности к сдвигам}
+\label{appendix:evaluation_code}
+\addcontentsline{toc}{subsection}{E. Оценка инвариантности к сдвигам}
+
+Основные функции для оценки инвариантности к сдвигам:
+
+\begin{lstlisting}[language=Python]
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+def calculate_consistency(model, original_img, shifted_imgs):
+    """
+    Вычисляет метрику Consistency между оригинальным 
+    и сдвинутыми изображениями.
+    """
+    model.eval()
+    device = next(model.parameters()).device
+    
+    with torch.no_grad():
+        # Предсказание для оригинального изображения
+        orig_output = model(original_img.to(device))
+        _, orig_pred = torch.max(orig_output, 1)
+        
+        # Предсказания для сдвинутых изображений
+        consistent_count = 0
+        total_count = 0
+        
+        for shifted_img in shifted_imgs:
+            shifted_output = model(shifted_img.to(device))
+            _, shifted_pred = torch.max(shifted_output, 1)
+            
+            # Проверяем совпадение предсказаний
+            consistent_count += torch.sum(orig_pred == shifted_pred).item()
+            total_count += orig_pred.size(0)
+    
+    return consistent_count / total_count
+
+
+def calculate_iou_stability(model, original_img, shifted_imgs, shifts):
+    """
+    Вычисляет стабильность IoU для модели детекции объектов.
+    """
+    model.eval()
+    device = next(model.parameters()).device
+    
+    with torch.no_grad():
+        # Предсказания для оригинального изображения
+        orig_preds = model(original_img.to(device))
+        orig_boxes = orig_preds[0][:, :4].cpu().numpy()
+        
+        iou_values = []
+        
+        # Для каждого сдвинутого изображения
+        for i, shifted_img in enumerate(shifted_imgs):
+            shift = shifts[i]
+            
+            # Предсказания для сдвинутого изображения
+            shift_preds = model(shifted_img.to(device))
+            shift_boxes = shift_preds[0][:, :4].cpu().numpy()
+            
+            # Компенсируем сдвиг в предсказанных рамках
+            compensated_boxes = shift_boxes.copy()
+            compensated_boxes[:, 0] -= shift[0]  # x1
+            compensated_boxes[:, 2] -= shift[0]  # x2
+            compensated_boxes[:, 1] -= shift[1]  # y1
+            compensated_boxes[:, 3] -= shift[1]  # y2
+            
+            # Вычисляем IoU между оригинальными и компенсированными рамками
+            if len(orig_boxes) > 0 and len(shift_boxes) > 0:
+                ious = calculate_iou_matrix(orig_boxes, compensated_boxes)
+                iou_stability = np.mean(np.max(ious, axis=1))
+                iou_values.append(iou_stability)
+    
+    return np.mean(iou_values) if iou_values else 0.0
+\end{lstlisting}
+
