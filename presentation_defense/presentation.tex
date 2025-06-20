@@ -1,0 +1,507 @@
+\documentclass[aspectratio=169]{beamer}
+\usepackage[utf8]{inputenc}
+\usepackage[T2A]{fontenc}
+\usepackage[russian]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{hyperref}
+\usepackage{subcaption}
+\usepackage{color}
+\usepackage{booktabs}
+
+% Настройка темы
+\usetheme{Madrid}
+\usecolortheme{default}
+
+% Настройка цветов
+\definecolor{miptred}{RGB}{178,34,52}
+\definecolor{miptblue}{RGB}{0,102,153}
+\definecolor{darkgreen}{RGB}{0,100,0}
+
+\setbeamercolor{structure}{fg=miptblue}
+\setbeamercolor{frametitle}{fg=miptblue}
+
+% Информация о презентации
+\title[Инвариантность к сдвигам в CNN]{Методы повышения инвариантности к сдвигам в сверточных нейронных сетях для задач компьютерного зрения}
+\subtitle{Выпускная квалификационная работа}
+\author{Полев Алексей}
+\institute[МФТИ]{Московский физико-технический институт}
+\date{2025}
+
+\begin{document}
+
+% Титульный слайд
+\begin{frame}
+    \titlepage
+\end{frame}
+
+% Содержание
+\begin{frame}{Содержание}
+    \tableofcontents
+\end{frame}
+
+\section{Введение}
+
+\begin{frame}{Актуальность проблемы}
+    \begin{block}{Проблема}
+        CNN теоретически должны быть инвариантны к позиционным сдвигам, но на практике демонстрируют низкую устойчивость к небольшим сдвигам входных данных
+    \end{block}
+    
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \textbf{Проявления проблемы:}
+            \begin{itemize}
+                \item Снижение точности при субпиксельных сдвигах
+                \item Нестабильность предсказаний
+                \item Ухудшение обобщающей способности
+                \item Критично для детекторов объектов
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            \textbf{Причины:}
+            \begin{itemize}
+                \item Операции субдискретизации
+                \item Max-pooling и stride > 1
+                \item Нарушение теоремы Найквиста-Шеннона
+                \item Эффект алиасинга
+            \end{itemize}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Цель и задачи работы}
+    \begin{block}{Цель}
+        Разработка и анализ методов повышения инвариантности к сдвигам для CNN в задачах классификации изображений и детекции объектов
+    \end{block}
+    
+    \textbf{Основные задачи:}
+    \begin{enumerate}
+        \item Теоретический анализ причин нарушения инвариантности к сдвигам
+        \item Реализация и адаптация методов анти-алиасинга (BlurPool и TIPS)
+        \item Разработка методики оценки инвариантности к сдвигам
+        \item Сравнительный анализ методов для разных архитектур и задач
+        \item Формулировка практических рекомендаций
+    \end{enumerate}
+\end{frame}
+
+\section{Теоретические основы}
+
+\begin{frame}{Математическая формализация проблемы}
+    \begin{block}{Эквивариантность к сдвигам}
+        Функция $F$ эквивариантна к сдвигам, если:
+        $$\mathrm{Shift}_{\Delta h, \Delta w}(F(X)) = F(\mathrm{Shift}_{\Delta h, \Delta w}(X))$$
+    \end{block}
+    
+    \begin{block}{Инвариантность к сдвигам}
+        Функция $F$ инвариантна к сдвигам, если:
+        $$F(X) = F(\mathrm{Shift}_{\Delta h, \Delta w}(X))$$
+    \end{block}
+    
+    \begin{alertblock}{Проблема}
+        Операции субдискретизации с шагом $s > 1$ нарушают эквивариантность для сдвигов, не кратных $s$
+    \end{alertblock}
+\end{frame}
+
+\begin{frame}{Алиасинг как источник проблемы}
+    \begin{columns}
+        \begin{column}{0.6\textwidth}
+            При субдискретизации с шагом $s$ без предварительной фильтрации:
+            $$\hat{Y}(\omega) = \frac{1}{s} \sum_{k=0}^{s-1} \hat{X}\left(\frac{\omega - 2\pi k}{s}\right)$$
+            
+            \begin{itemize}
+                \item Спектр содержит реплики исходного сигнала
+                \item Наложение реплик вызывает алиасинг
+                \item Малые сдвиги → непредсказуемые изменения активаций
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.4\textwidth}
+            \begin{center}
+                \textbf{Эффект алиасинга}
+                
+                \vspace{0.5cm}
+                \tikz{
+                    \draw[->] (0,0) -- (3,0) node[right] {$\omega$};
+                    \draw[->] (0,0) -- (0,2) node[above] {$|\hat{X}(\omega)|$};
+                    \draw[thick, blue] (0.2,0.1) -- (0.8,1.5) -- (1.2,1.5) -- (1.8,0.1);
+                    \draw[thick, red] (1.2,0.1) -- (1.8,1.2) -- (2.2,1.2) -- (2.8,0.1);
+                    \node[below] at (1.5,0) {$\pi/s$};
+                    \draw[dashed] (1.5,0) -- (1.5,2);
+                }
+            \end{center}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\section{Методы решения}
+
+\begin{frame}{BlurPool: Антиалиасинг через фильтрацию}
+    \begin{block}{Принцип работы}
+        Применение низкочастотного фильтра перед субдискретизацией:
+        $$\text{BlurPool}_{m,s}(x) = \text{Subsample}_{s}(\text{Blur}_{m}(x))$$
+    \end{block}
+    
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \textbf{Используемые фильтры:}
+            \begin{itemize}
+                \item Triangle-3: $\frac{1}{16}[1, 2, 1]^T \cdot [1, 2, 1]$
+                \item Binomial-5: $\frac{1}{256}[1, 4, 6, 4, 1]^T \cdot [1, 4, 6, 4, 1]$
+            \end{itemize}
+            
+            \textbf{Модификации операций:}
+            \begin{itemize}
+                \item $\text{MaxPool}_{k,s} \rightarrow \text{Subsample}_{s} \circ \text{Blur}_{m} \circ \text{Max}_{k,1}$
+                \item $\text{Conv}_{k,s} \rightarrow \text{Subsample}_{s} \circ \text{Blur}_{m} \circ \text{Conv}_{k,1}$
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            \textbf{Преимущества:}
+            \begin{itemize}
+                \item Простота интеграции
+                \item Минимальные вычислительные затраты (<1\%)
+                \item Применимо к предобученным моделям
+                \item Значительное улучшение инвариантности
+            \end{itemize}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{TIPS: Полифазная выборка}
+    \begin{block}{Принцип работы}
+        Разбиение сигнала на $s^2$ фаз с последующим взвешенным объединением:
+        $$\text{TIPS}_s(x) = \sum_{i=0}^{s-1}\sum_{j=0}^{s-1} \tau_{is+j} \cdot \text{Subsample}_{s}(\text{Shift}_{(i,j)}(x))$$
+    \end{block}
+    
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \textbf{Особенности:}
+            \begin{itemize}
+                \item $s^2$ параллельных вычислительных путей
+                \item Обучаемые смешивающие коэффициенты $\tau_{is+j}$
+                \item Теоретическая гарантия инвариантности
+                \item Обработка субпиксельных сдвигов
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            \textbf{Преимущества и недостатки:}
+            \begin{itemize}
+                \item[+] Максимальная инвариантность
+                \item[+] Теоретические гарантии
+                \item[+] Высокая стабильность
+                \item[-] Большие вычислительные затраты
+                \item[-] Сложность интеграции
+            \end{itemize}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\section{Экспериментальная часть}
+
+\begin{frame}{Экспериментальная методология}
+    \begin{block}{Используемые датасеты}
+        \begin{itemize}
+            \item \textbf{CIFAR-10} — классификация (60,000 изображений 32×32)
+            \item \textbf{ImageNet-mini} — классификация (100 классов, 1300 изображений)
+            \item \textbf{Imagenette} — быстрые эксперименты (10 классов)
+            \item \textbf{COCO-sample} — детекция объектов
+        \end{itemize}
+    \end{block}
+    
+    \begin{block}{Тестирование инвариантности}
+        \begin{itemize}
+            \item Синтетические последовательности сдвигов (0-8 пикселей)
+            \item Субпиксельные сдвиги через билинейную интерполяцию
+            \item Комбинированные сцены для детекции
+            \item До 100 прогонов для каждого изображения
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}{Архитектуры и модификации}
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \textbf{Классификационные модели:}
+            \begin{itemize}
+                \item VGG16 — замена max-pooling слоев
+                \item ResNet50 — модификация сверток с stride=2
+                \item Применимо к предобученным моделям
+            \end{itemize}
+            
+            \vspace{0.5cm}
+            
+            \textbf{Детектор объектов:}
+            \begin{itemize}
+                \item YOLOv5s — сложная архитектура
+                \item Backbone (CSPDarknet)
+                \item Neck (PANet)
+                \item Head — предсказания
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            \textbf{Метрики оценки:}
+            
+            \textit{Классификация:}
+            \begin{itemize}
+                \item Top-1 Accuracy
+                \item Stability (при сдвигах 0-5 пикс.)
+                \item Consistency
+                \item Flip-Invariance
+            \end{itemize}
+            
+            \textit{Детекция:}
+            \begin{itemize}
+                \item mAP (mean Average Precision)
+                \item IoU Stability
+                \item Center Drift (дрейф центра)
+                \item Size Consistency
+            \end{itemize}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\section{Результаты}
+
+\begin{frame}{Результаты для классификации}
+    \begin{table}[h]
+    \centering
+    \small
+    \begin{tabular}{|l|c|c|c|c|}
+    \hline
+    \textbf{Модель} & \textbf{Top-1 Acc.} & \textbf{Stability} & \textbf{Consistency} & \textbf{Flip-Inv.} \\
+    \hline
+    VGG16 & 0.7135 & 0.8612 & 0.9103 & 0.8821 \\
+         VGG16 + BlurPool & 0.7262 & \textcolor{darkgreen}{0.9358} & \textcolor{darkgreen}{0.9642} & 0.9127 \\
+     VGG16 + TIPS & 0.7298 & \textcolor{darkgreen}{0.9687} & \textcolor{darkgreen}{0.9801} & 0.9236 \\
+    \hline
+    ResNet50 & 0.7613 & 0.8874 & 0.9256 & 0.9014 \\
+         ResNet50 + BlurPool & 0.7725 & \textcolor{darkgreen}{0.9432} & \textcolor{darkgreen}{0.9715} & 0.9325 \\
+     ResNet50 + TIPS & 0.7769 & \textcolor{darkgreen}{0.9742} & \textcolor{darkgreen}{0.9857} & 0.9412 \\
+    \hline
+    \end{tabular}
+    \end{table}
+    
+    \begin{block}{Ключевые результаты}
+        \begin{itemize}
+            \item Улучшение стабильности на \textbf{7.5-10.7 п.п.}
+            \item TIPS показывает лучшие результаты по всем метрикам
+            \item Одновременное улучшение точности и стабильности
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}{Результаты для детекции объектов}
+    \begin{table}[h]
+    \centering
+    \small
+    \begin{tabular}{|l|c|c|c|c|}
+    \hline
+    \textbf{Модель} & \textbf{mAP} & \textbf{IoU Stability} & \textbf{Center Drift} & \textbf{Size Cons.} \\
+    \hline
+    YOLOv5s & 0.371 & 0.853 & 4.87 & 0.912 \\
+         YOLOv5s + BlurPool & 0.384 & \textcolor{darkgreen}{0.921} & \textcolor{darkgreen}{2.31} & 0.958 \\
+     YOLOv5s + TIPS & 0.392 & \textcolor{darkgreen}{0.964} & \textcolor{darkgreen}{1.45} & 0.974 \\
+    \hline
+    \end{tabular}
+    \end{table}
+    
+    \vspace{0.3cm}
+    
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \textbf{Основные улучшения:}
+            \begin{itemize}
+                \item IoU Stability: +6.8-11.1 п.п.
+                \item Center Drift: снижение в 2+ раза
+                \item mAP: улучшение на 1.3-2.1 п.п.
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            \textbf{Особенно для малых объектов:}
+            \begin{itemize}
+                \item Наибольший прирост точности
+                \item До 2.6 п.п. для TIPS
+                \item Критично для практических задач
+            \end{itemize}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Вычислительная эффективность}
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+                        \textbf{Классификационные модели:}
+            \begin{table}[h]
+            \centering
+            \footnotesize
+            \begin{tabular}{|l|c|c|}
+            \hline
+            \textbf{Модель} & \textbf{FLOPs (G)} & \textbf{Overhead} \\
+            \hline
+            VGG16 & 15.47 & - \\
+             + BlurPool & 15.58 & \textcolor{darkgreen}{0.7\%} \\
+             + TIPS & 15.83 & \textcolor{orange}{2.3\%} \\
+            \hline
+            ResNet50 & 4.12 & - \\
+             + BlurPool & 4.17 & \textcolor{darkgreen}{1.2\%} \\
+             + TIPS & 4.32 & \textcolor{orange}{4.9\%} \\
+            \hline
+            \end{tabular}
+            \end{table}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+                        \textbf{Детекция объектов:}
+            \begin{table}[h]
+            \centering
+            \footnotesize
+            \begin{tabular}{|l|c|c|}
+            \hline
+            \textbf{Модель} & \textbf{FPS} & \textbf{Overhead} \\
+            \hline
+            YOLOv5s & 47.3 & - \\
+             + BlurPool & 45.8 & \textcolor{darkgreen}{1.2\%} \\
+             + TIPS & 45.1 & \textcolor{orange}{3.6\%} \\
+            \hline
+            \end{tabular}
+            \end{table}
+        \end{column}
+    \end{columns}
+    
+    \vspace{0.5cm}
+    
+    \begin{block}{Вывод}
+        \begin{itemize}
+            \item BlurPool: минимальные затраты (<1\% FLOPs)
+            \item TIPS: умеренные затраты (2-5\% FLOPs)
+            \item Пригодны для систем реального времени
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\section{Практические рекомендации}
+
+\begin{frame}{Рекомендации по применению}
+    \begin{block}{Системы критического применения}
+        \textbf{Рекомендация:} TIPS
+        \begin{itemize}
+            \item Медицинская диагностика, автономное вождение
+            \item Максимальная стабильность (97-98\% консистентности)
+            \item Минимальный дрейф локализации
+            \item Оправданы дополнительные 4-5\% вычислений
+        \end{itemize}
+    \end{block}
+    
+    \begin{block}{Системы с ограниченными ресурсами}
+        \textbf{Рекомендация:} BlurPool
+        \begin{itemize}
+            \item Мобильные приложения, встраиваемые системы
+            \item Существенное улучшение (91-94\% консистентности)
+            \item Минимальные затраты (<1\% FLOPs)
+            \item Идеально для батарейных устройств
+        \end{itemize}
+    \end{block}
+    
+    \begin{block}{Детекция малых объектов}
+        Особенно рекомендуется применение методов антиалиасинга
+        \begin{itemize}
+            \item Наибольший выигрыш в точности (до 2.6 п.п.)
+            \item Критично для систем видеонаблюдения
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\section{Заключение}
+
+\begin{frame}{Основные результаты}
+    \begin{block}{Научная новизна}
+        \begin{itemize}
+            \item Комплексный анализ инвариантности к сдвигам в CNN
+            \item Первое детальное исследование влияния на детекторы объектов
+            \item Математическая формализация проблемы алиасинга в CNN
+            \item Адаптация методов антиалиасинга для YOLOv5
+        \end{itemize}
+    \end{block}
+    
+    \begin{block}{Практическая значимость}
+        \begin{itemize}
+            \item Повышение стабильности CNN на 40-90\%
+            \item Улучшение точности классификации на 1.3-2.1 п.п.
+            \item Снижение дрейфа локализации в 2+ раза
+            \item Минимальные вычислительные затраты
+            \item Простота интеграции в существующие системы
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}{Выводы}
+    \begin{enumerate}
+        \item \textbf{Проблема подтверждена:} Современные CNN демонстрируют значительную нестабильность при субпиксельных сдвигах (до 30\% вариации для классификации, 25\% для детекции)
+        
+        \item \textbf{Методы эффективны:} BlurPool и TIPS обеспечивают существенное повышение инвариантности при минимальных вычислительных затратах
+        
+        \item \textbf{Практическая применимость:} Методы легко интегрируются в существующие архитектуры без значительного переобучения
+        
+        \item \textbf{Рекомендации сформулированы:} Даны четкие критерии выбора методов для различных типов приложений
+        
+        \item \textbf{Перспективы развития:} Направления для дальнейших исследований в области робастности CNN
+    \end{enumerate}
+\end{frame}
+
+\begin{frame}
+    \begin{center}
+        \Huge Спасибо за внимание!
+    \end{center}
+\end{frame}
+
+\section{Дополнительные слайды}
+
+\begin{frame}{Детальный анализ стабильности}
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \textbf{Метрики стабильности:}
+            \begin{itemize}
+                \item Consistency: $\frac{1}{N}\sum_{i=1}^N \cos(f(x_i), f(x_i'))$
+                \item IoU Stability: средняя IoU при сдвигах
+                \item Center Drift: $\sqrt{(\Delta x)^2 + (\Delta y)^2}$
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            \textbf{Экспериментальный протокол:}
+            \begin{itemize}
+                \item 8 направлений сдвига
+                \item Субпиксельные сдвиги 0.1-0.9
+                \item Статистическая значимость p<0.01
+                \item Воспроизводимые результаты
+            \end{itemize}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Сравнение с другими методами}
+    \begin{table}[h]
+    \centering
+    \small
+    \begin{tabular}{|l|c|c|c|}
+    \hline
+    \textbf{Метод} & \textbf{Стабильность} & \textbf{Вычисл. затраты} & \textbf{Интеграция} \\
+    \hline
+    Стандартные CNN & Низкая & Базовая & - \\
+    Data Augmentation & Умеренная & Высокие & Легкая \\
+    BlurPool & Высокая & Минимальные & Легкая \\
+    TIPS & Максимальная & Умеренные & Средняя \\
+    \hline
+    \end{tabular}
+    \end{table}
+    
+    \begin{block}{Преимущества предложенных методов}
+        \begin{itemize}
+            \item Архитектурный подход vs. аугментация данных
+            \item Гарантированная инвариантность vs. случайная стабилизация
+            \item Эффективность на этапе инференса
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\end{document}
