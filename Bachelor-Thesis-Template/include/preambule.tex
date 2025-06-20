@@ -90,3 +90,7 @@ breaklines=true
 
 % Отступ перед первым абзацем в каждом разделе
 \usepackage{indentfirst}
+
+% Определение окружений для примечаний и заметок
+\newtheorem{remarkenv}{Примечание}
+\newenvironment{note}{\begin{remarkenv}}{\end{remarkenv}}
