@@ -45,32 +45,253 @@
 
 \section{Введение}
 
-\begin{frame}{Актуальность проблемы}
-    \begin{block}{Проблема}
-        CNN теоретически должны быть инвариантны к позиционным сдвигам, но на практике демонстрируют низкую устойчивость к небольшим сдвигам входных данных
+\begin{frame}{Сверточные нейронные сети (CNN)}
+    \begin{block}{Что такое CNN?}
+        Класс глубоких нейронных сетей, специально разработанных в первую очередь для обработки изображений
     \end{block}
     
     \begin{columns}
         \begin{column}{0.5\textwidth}
-            \textbf{Проявления проблемы:}
+            \textbf{Ключевые компоненты:}
             \begin{itemize}
-                \item Снижение точности при субпиксельных сдвигах
-                \item Нестабильность предсказаний
-                \item Ухудшение обобщающей способности
-                \item Критично для детекторов объектов
+                \item \textbf{Свертка} — извлечение локальных признаков
+                \item \textbf{Пулинг} — уменьшение размерности
+                \item \textbf{Активация} — нелинейные преобразования
+                \item \textbf{Полносвязные слои} — классификация
             \end{itemize}
         \end{column}
         \begin{column}{0.5\textwidth}
-            \textbf{Причины:}
+            \textbf{Применения:}
             \begin{itemize}
-                \item Операции субдискретизации
-                \item Max-pooling и stride > 1
-                \item Нарушение теоремы Найквиста-Шеннона
-                \item Эффект алиасинга
+                \item Классификация изображений
+                \item Детекция объектов
+                \item Сегментация
+                \item Медицинская диагностика
+                \item Автономное вождение
+                \item Системы безопасности
             \end{itemize}
         \end{column}
     \end{columns}
+    
+
 \end{frame}
+
+\begin{frame}{Что такое алиасинг?}
+    \begin{block}{Определение}
+        \textbf{Алиасинг} — искажение сигнала при нарушении теоремы Найквиста–Шеннона
+    \end{block}
+
+    \begin{center}
+        \textbf{Теорема Найквиста–Шеннона}
+        \[
+            f_s \;\ge\; 2\,f_{\text{max}}
+        \]
+        
+        \vspace{0.5cm}
+        
+        \begin{block}{Применение к CNN}
+            В CNN операции с \texttt{stride}$>1$ «отбрасывают» выборки → высокие частоты маскируются под низкие частоты.
+            
+            \vspace{0.3cm}
+            
+            \textbf{Результат:} При малом сдвиге входного изображения на 1 пиксель, выходные активации могут кардинально измениться.
+        \end{block}
+    \end{center}
+\end{frame}
+
+\begin{frame}{Иллюстративный пример алиасинга в MaxPool}
+    \begin{center}
+        \textbf{Иллюстративный пример алиасинга с MaxPool}
+        
+        \vspace{0.5cm}
+        \begin{tikzpicture}[scale=1.0]
+            % Оси (с правильными отступами)
+            \draw[->] (0,0) -- (9,0) node[right] {\small Пространственная позиция};
+            \draw[->] (0,0) -- (0,2.0) node[above] {\small Сигнал};
+            
+            % Входной сигнал (серая линия с точками) - координаты по вашему описанию
+            \draw[thick,gray] plot coordinates {(0.5,0) (1.5,1) (2.5,1) (3.5,0) (4.5,0) (5.5,1) (6.5,1) (7.5,0)};
+            
+            % Точки входного сигнала на позициях 0.5, 1.5, 2.5, ...
+            \foreach \x/\y in {0.5/0, 1.5/1, 2.5/1, 3.5/0, 4.5/0, 5.5/1, 6.5/1, 7.5/0}{
+                \fill[gray] (\x,\y) circle (3pt);
+            }
+            
+            % MaxPool без сдвига (синие квадраты) - над четными позициями (0,2,4,6)
+            % Берем максимум из окон [0.5,1.5], [2.5,3.5], [4.5,5.5], [6.5,7.5]
+            \foreach \x/\y in {0/0, 2/1, 4/0, 6/1, 8/0}{
+                \draw[thick,blue,fill=blue!20] (\x-0.12,\y-0.12) rectangle (\x+0.12,\y+0.12);
+            }
+            
+            % MaxPool со сдвигом на 1 (красные ромбы) - над нечетными позициями (1,3,5,7)
+            % Берем максимум из окон [1.5,2.5], [3.5,4.5], [5.5,6.5], [7.5,8.5]
+            \foreach \x/\y in {1/1, 3/1, 5/1, 7/1}{
+                \draw[thick,red,fill=red!20] (\x-0.15,\y) -- (\x,\y+0.15) -- (\x+0.15,\y) -- (\x,\y-0.15) -- cycle;
+            }
+            
+            % Деления на оси X
+            \foreach \x in {0,1,2,3,4,5,6,7,8}{
+                \node at (\x,-0.5) {\small \x};
+            }
+            
+            % Деления на оси Y
+            \foreach \y in {0.0,1.0}{
+                \node at (-0.5,\y) {\small \y};
+            }
+            
+            % Легенда (размещена аккуратно наверху)
+            \node[gray] at (1.5,1.7) {\footnotesize Вход};
+            \node[blue] at (3.8,1.7) {\footnotesize MaxPool (Сдвиг-0)};
+            \node[red] at (6.8,1.7) {\footnotesize MaxPool (Сдвиг-1)};
+        \end{tikzpicture}
+        
+        \vspace{0.5cm}
+        \begin{alertblock}{Ключевое наблюдение}
+            Сдвиг входного сигнала на 1 пиксель кардинально меняет результат MaxPooling операции — это и есть проявление алиасинга в CNN
+        \end{alertblock}
+    \end{center}
+\end{frame}
+
+% ─────────── 5–7 (НОВЫЕ) ───────────
+\begin{frame}{Субдискретизация (stride $>1$)}
+    \begin{block}{Определение}
+        \textbf{Субдискретизация} — уменьшение пространственного разрешения за счёт выборки каждого $s$-го элемента.
+    \end{block}
+
+    \begin{columns}[T]
+        \begin{column}{0.48\textwidth}
+            \textbf{Где применяется}
+            \begin{itemize}
+                \item Max-/Average-pooling (\texttt{stride}$>1$)
+                \item Свертки с \texttt{stride}$>1$
+                \item Любые down-sampling-операции
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \textbf{Зачем нужна}
+            \begin{itemize}
+                \item Снижение вычислительных затрат
+                \item Расширение рецептивного поля
+                \item Борьба с переобучением
+                \item Иерархия признаков
+            \end{itemize}
+        \end{column}
+    \end{columns}
+
+    \begin{alertblock}{Ключевая проблема}
+        Потеря точного положения признаков → возможное нарушение инвариантности к сдвигам.
+    \end{alertblock}
+\end{frame}
+
+\begin{frame}{Max-pooling \boldmath$2\times2$: визуальный пример}
+    \centering
+    \begin{tikzpicture}[x=0.65cm,y=0.65cm]
+        % вход 4x4
+        \foreach \i in {0,...,3}{
+            \foreach \j in {0,...,3}{
+                \draw (\i,-\j) rectangle ++(1,-1);
+            }
+        }
+        \node at (2,-4.8) {Вход $4\times4$};
+
+        % окно 2x2
+        \draw[thick,red] (0,-0) rectangle ++(2,-2);
+
+        % стрелка
+        \draw[->,thick] (4.5,-2) -- (6.5,-2);
+
+        % выход 2x2
+        \foreach \i in {0,1}{
+            \foreach \j in {0,1}{
+                \draw (7+\i,-1-\j) rectangle ++(1,-1);
+            }
+        }
+        \node at (8,-4.8) {Выход $2\times2$};
+    \end{tikzpicture}
+
+    \vspace{0.4cm}
+    \begin{block}{Что происходит}
+        Из каждого окна $2\times2$ берётся максимум → размер уменьшается в 4 раза, но позиционная информация стирается.
+    \end{block}
+\end{frame}
+
+\begin{frame}{Сдвиг на 1 пиксель → алиасинг}
+    \begin{columns}[T]
+        \begin{column}{0.52\textwidth}
+            \textbf{Сценарий}
+            \begin{enumerate}
+                \item Кот в ячейке $(10,15)$.
+                \item Сдвиг всего изображения на $+1$ пиксель → кот в $(11,15)$.
+                \item Применяем Max-pooling $2\times2$.
+            \end{enumerate}
+
+            \vspace{0.2cm}
+            \textbf{Результат}
+            \begin{itemize}
+                \item Окна покрывают \emph{другие} части объекта.
+                \item Активации резко меняются.
+                \item Нарушается инвариантность даже при малых сдвигах.
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.46\textwidth}
+            \begin{alertblock}{Последствия}
+                \begin{itemize}
+                    \item \textbf{Классификация:} сбой метки (кот → собака).
+                    \item \textbf{Детекция:} дрейф координат, «прыгающие» боксы.
+                    \item \textbf{Онлайн-системы:} нестабильные прогнозы кадр-к-кадру.
+                \end{itemize}
+            \end{alertblock}
+        \end{column}
+    \end{columns}
+
+    \vspace{0.3cm}
+    Корень проблемы — субдискретизация без антиалиасинговой фильтрации.
+\end{frame}
+
+\begin{frame}{Инвариантность и эквивариантность}
+    \begin{block}{Инвариантность к сдвигам}
+        Выход функции \textbf{не изменяется} при сдвиге входа
+        $$f(\text{shift}(x)) = f(x)$$
+        \textit{Пример: классификация — кот остается котом независимо от положения}
+    \end{block}
+    
+    \begin{block}{Эквивариантность к сдвигам}
+        Сдвиг входа приводит к \textbf{соответствующему сдвигу} выхода
+        $$f(\text{shift}(x)) = \text{shift}(f(x))$$
+        \textit{Пример: детекция — сдвиг объекта → сдвиг ограничивающей рамки}
+    \end{block}
+\end{frame}
+
+\begin{frame}{Почему это важно и где нарушается?}
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \textbf{Почему это важно?}
+            \begin{itemize}
+                \item Стабильность предсказаний
+                \item Лучшая обобщающая способность
+                \item Робастность к шуму
+                \item Консистентность результатов
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            \textbf{Где нарушается?}
+            \begin{itemize}
+                \item Max-pooling с stride > 1
+                \item Свертки с stride > 1
+                \item Average-pooling с stride > 1
+                \item Любая субдискретизация
+            \end{itemize}
+        \end{column}
+    \end{columns}
+    
+    \vspace{1cm}
+    
+    \begin{alertblock}{Ключевая проблема}
+        Современные CNN архитектуры систематически нарушают инвариантность к сдвигам из-за операций субдискретизации без предварительной фильтрации
+    \end{alertblock}
+\end{frame}
+
+
 
 \begin{frame}{Цель и задачи работы}
     \begin{block}{Цель}
@@ -88,52 +309,6 @@
 \end{frame}
 
 \section{Теоретические основы}
-
-\begin{frame}{Математическая формализация проблемы}
-    \begin{block}{Эквивариантность к сдвигам}
-        Функция $F$ эквивариантна к сдвигам, если:
-        $$\mathrm{Shift}_{\Delta h, \Delta w}(F(X)) = F(\mathrm{Shift}_{\Delta h, \Delta w}(X))$$
-    \end{block}
-    
-    \begin{block}{Инвариантность к сдвигам}
-        Функция $F$ инвариантна к сдвигам, если:
-        $$F(X) = F(\mathrm{Shift}_{\Delta h, \Delta w}(X))$$
-    \end{block}
-    
-    \begin{alertblock}{Проблема}
-        Операции субдискретизации с шагом $s > 1$ нарушают эквивариантность для сдвигов, не кратных $s$
-    \end{alertblock}
-\end{frame}
-
-\begin{frame}{Алиасинг как источник проблемы}
-    \begin{columns}
-        \begin{column}{0.6\textwidth}
-            При субдискретизации с шагом $s$ без предварительной фильтрации:
-            $$\hat{Y}(\omega) = \frac{1}{s} \sum_{k=0}^{s-1} \hat{X}\left(\frac{\omega - 2\pi k}{s}\right)$$
-            
-            \begin{itemize}
-                \item Спектр содержит реплики исходного сигнала
-                \item Наложение реплик вызывает алиасинг
-                \item Малые сдвиги → непредсказуемые изменения активаций
-            \end{itemize}
-        \end{column}
-        \begin{column}{0.4\textwidth}
-            \begin{center}
-                \textbf{Эффект алиасинга}
-                
-                \vspace{0.5cm}
-                \tikz{
-                    \draw[->] (0,0) -- (3,0) node[right] {$\omega$};
-                    \draw[->] (0,0) -- (0,2) node[above] {$|\hat{X}(\omega)|$};
-                    \draw[thick, blue] (0.2,0.1) -- (0.8,1.5) -- (1.2,1.5) -- (1.8,0.1);
-                    \draw[thick, red] (1.2,0.1) -- (1.8,1.2) -- (2.2,1.2) -- (2.8,0.1);
-                    \node[below] at (1.5,0) {$\pi/s$};
-                    \draw[dashed] (1.5,0) -- (1.5,2);
-                }
-            \end{center}
-        \end{column}
-    \end{columns}
-\end{frame}
 
 \section{Методы решения}
 
